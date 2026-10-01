@@ -1,27 +1,31 @@
 {
-  "name": "My App Block",
-  "blockId": "<slug>",
+  "$schema": "https://civitai.com/schemas/app-block/v1.json",
+  "blockId": "character-sheet-studio",
   "version": "0.1.0",
-  "description": "A new Civitai App Block. Replace this with what it does.",
-  "minApiVersion": "0.5.0",
-  "contentRating": "g",
-  "renderMode": "iframe",
-  "trustTier": "internal",
+  "name": "Character Sheet Studio",
+  "type": "block",
   "scopes": [
-    "models:read:self",
-    "user:read:self"
+    "ai:write:budgeted"
   ],
-  "iframe": {
-    "src": "https://<slug>.apps.civitaic.com/",
-    "minHeight": 200,
-    "maxHeight": 1600,
-    "resizable": true
+  "scopeJustifications": {
+    "ai:write:budgeted": "Runs image generations on the user's behalf, spending from the per-generation Buzz budget the page grants."
   },
-  "targets": [
-    {
-      "slotId": "model.sidebar_top",
-      "priority": 100
-    }
-  ],
-  "publicSettingsKeys": []
+  "page": {
+    "path": "/",
+    "title": "Character Sheet Studio",
+    "icon": "bolt",
+    "buzzBudgetPerGen": 300
+  },
+  "iframe": {
+    "minHeight": 600,
+    "maxHeight": 4000,
+    "resizable": true,
+    "sandbox": "allow-scripts allow-forms",
+    "src": "https://character-sheet-studio.civit.ai/"
+  },
+  "contentRating": "g",
+  "bootSkeleton": true,
+  "minApiVersion": "1.0",
+  "buildCommand": "npm run build",
+  "outputDir": "dist"
 }
