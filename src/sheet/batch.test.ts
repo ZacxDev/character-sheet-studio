@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { SheetPanel } from './types.js';
 import {
+  IDEMPOTENCY_KEY_PATTERN,
   idempotencyKeyFor,
   nextPanelToSubmit,
   resolvePanelSeed,
@@ -21,9 +22,9 @@ const panel = (over: Partial<SheetPanel> = {}): SheetPanel => ({
 });
 
 describe('idempotencyKeyFor', () => {
-  it('builds a stable sheetId:panelId:nonce key', () => {
-    expect(idempotencyKeyFor('sheet_abc', 'panel_1')).toBe('sheet_abc:panel_1:0');
-    expect(idempotencyKeyFor('sheet_abc', 'panel_1', 2)).toBe('sheet_abc:panel_1:2');
+  it('builds a stable sheetId-panelId-nonce key', () => {
+    expect(idempotencyKeyFor('sheet_abc', 'panel_1')).toBe('sheet_abc-panel_1-0');
+    expect(idempotencyKeyFor('sheet_abc', 'panel_1', 2)).toBe('sheet_abc-panel_1-2');
     // Stable across calls — retry-safe.
     expect(idempotencyKeyFor('sheet_abc', 'panel_1')).toBe(
       idempotencyKeyFor('sheet_abc', 'panel_1'),
@@ -32,6 +33,17 @@ describe('idempotencyKeyFor', () => {
   it('differs per panel and per nonce', () => {
     expect(idempotencyKeyFor('s', 'p1')).not.toBe(idempotencyKeyFor('s', 'p2'));
     expect(idempotencyKeyFor('s', 'p1', 0)).not.toBe(idempotencyKeyFor('s', 'p1', 1));
+  });
+  it('satisfies the live host idempotencyKey pattern (the mock host never checks)', () => {
+    // The production host 400s `blocks.submitWorkflow` when the key doesn't
+    // match /^[A-Za-z0-9_-]{1,64}$/ — colons were the live bug.
+    const ids: Array<[string, string, number]> = [
+      ['sheet_abc', 'panel_1', 0],
+      ['r' + 'm'.repeat(20), 'p-front', 12],
+    ];
+    for (const [s, p, n] of ids) {
+      expect(idempotencyKeyFor(s, p, n)).toMatch(IDEMPOTENCY_KEY_PATTERN);
+    }
   });
 });
 

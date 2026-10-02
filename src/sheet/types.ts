@@ -398,7 +398,8 @@ export interface SheetPanel extends PanelSpec {
   errorCode?: string;
   /**
    * Incremented on every (re)submit. The idempotency key is
-   * `sheetId:panelId:submitNonce`: a retry after a lost response reuses the
+   * `sheetId-panelId-submitNonce` (dashes — the host rejects anything outside
+   * /^[A-Za-z0-9_-]{1,64}$/): a retry after a lost response reuses the
    * key (same nonce → the host collapses it to one charge), while a
    * regenerate bumps the nonce so the orchestrator treats it as a new
    * logical submit.

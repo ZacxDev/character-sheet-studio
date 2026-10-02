@@ -9,7 +9,7 @@
 //                   submitting N panels without a price is not something we do).
 //   4. confirm    — per-panel costs + total, one explicit "Generate" click
 //   5. submit     — sequential, one panel at a time, stable idempotency keys
-//                   `sheetId:panelId:submitNonce` (a retry after a lost response
+//                   `sheetId-panelId-submitNonce` (a retry after a lost response
 //                   reuses the key → one charge, not two)
 //   6. handoff    — the sheet persists after EVERY panel transition, then the
 //                   Sheet View takes over polling.

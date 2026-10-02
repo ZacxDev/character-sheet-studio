@@ -9,16 +9,26 @@ import { isTerminalPanelStatus } from './types.js';
 import type { PricedFailureKind } from '../money/generation.js';
 
 /**
- * The STABLE idempotency key for one panel's submit: `sheetId:panelId:nonce`.
+ * The host's constraint on the pattern (invalid_format → 400 on
+ * `blocks.submitWorkflow`), expressed here so a unit test pins it: the mock
+ * host does NOT enforce it, which is how a colon-separated key shipped.
+ */
+export const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * The STABLE idempotency key for one panel's submit: `sheetId-panelId-nonce`.
  *
  * Retrying a submit whose response was lost MUST reuse this exact key (same
  * nonce) so the host + orchestrator collapse it to ONE Buzz charge instead of
  * double-charging (see `SubmitWorkflowOptions.idempotencyKey`). It is derived
  * from ids the sheet already persists, so it survives tab closes and
  * re-renders unchanged. A regenerate bumps the nonce → a new logical submit.
+ *
+ * The separator is `-`, not `:` — the host rejects anything outside
+ * {@link IDEMPOTENCY_KEY_PATTERN} with a 400.
  */
 export function idempotencyKeyFor(sheetId: string, panelId: string, nonce = 0): string {
-  return `${sheetId}:${panelId}:${nonce}`;
+  return `${sheetId}-${panelId}-${nonce}`;
 }
 
 /**
