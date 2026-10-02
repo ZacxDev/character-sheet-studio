@@ -14,6 +14,8 @@ export function storeErrorMessage(kind: StoreErrorKind): string {
       return 'That entry is too large to store. Shorten the text and try again.';
     case 'request-failed':
       return 'Saving failed — the connection dropped. Your changes are still on screen; try again.';
+    case 'not-permitted':
+      return 'Saving is unavailable — the app is missing a storage permission it needs. Your changes are still on screen; this needs an app fix, not another try.';
     case 'unknown':
       return 'Saving failed for an unknown reason. Your changes are still on screen; try again.';
   }

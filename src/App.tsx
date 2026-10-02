@@ -45,7 +45,11 @@ export function App() {
   const rootRef = useRef<HTMLDivElement>(null);
   useBlockResize(rootRef);
 
-  const [tab, setTab] = useState<Tab>('characters');
+  // TEMPORARY screenshot rig — reverted after screenshots are captured.
+  const [tab, setTab] = useState<Tab>(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    return t === 'stacks' || t === 'builder' || t === 'sheets' ? t : 'characters';
+  });
   const [openSheetId, setOpenSheetId] = useState<string | null>(null);
   const [preselectedCharacterId, setPreselectedCharacterId] = useState<string | undefined>(
     undefined,

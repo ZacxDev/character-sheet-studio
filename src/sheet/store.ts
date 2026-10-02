@@ -46,7 +46,29 @@ export type StoreErrorKind =
   | 'quota-exceeded'
   | 'row-limit'
   | 'request-failed'
+  | 'not-permitted'
   | 'unknown';
+
+/**
+ * The host's scope-denied message for app storage, e.g.
+ * `storage set requires the apps:storage:write scope`. The SDK's classifier
+ * deliberately leaves authorization failures unrecognized (the set is
+ * open-ended), but THIS one has a fixed template and a known meaning: the
+ * block's manifest does not declare the storage scope. Retrying cannot fix
+ * it, so it gets its own kind instead of landing in 'unknown'.
+ */
+const STORAGE_SCOPE_DENIED =
+  /storage (get|set|delete|list) requires the apps:storage:(read|write) scope/;
+
+function errorMessage(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const m = (error as { message?: unknown }).message;
+    return typeof m === 'string' ? m : '';
+  }
+  return '';
+}
 
 /**
  * Map the SDK's rejection classification onto the app's closed set.
@@ -54,6 +76,7 @@ export type StoreErrorKind =
  * lands in 'unknown' — the UI must not assume "transient, retry".
  */
 export function classifyStoreError(error: unknown): StoreErrorKind {
+  if (STORAGE_SCOPE_DENIED.test(errorMessage(error))) return 'not-permitted';
   const reason: AppStorageRejectionReason | null =
     classifyAppStorageError(error);
   switch (reason) {

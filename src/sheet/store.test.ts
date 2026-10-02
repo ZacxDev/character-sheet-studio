@@ -218,4 +218,27 @@ describe('classifyStoreError', () => {
     expect(classifyStoreError(null)).toBe('unknown');
     expect(classifyStoreError('the database hamster is tired')).toBe('unknown');
   });
+
+  it('detects the host scope-denied failure as not-permitted', () => {
+    // The exact bridge shape the host returns when the manifest lacks the
+    // storage scope: { message, code: -32003, data: { code: 'FORBIDDEN', … } }.
+    const bridgeRejection = {
+      message: 'storage set requires the apps:storage:write scope',
+      code: -32003,
+      data: { code: 'FORBIDDEN', httpStatus: 403, path: 'apps.storage.set' },
+    };
+    expect(classifyStoreError(bridgeRejection)).toBe('not-permitted');
+    expect(
+      classifyStoreError(
+        new Error('storage get requires the apps:storage:read scope'),
+      ),
+    ).toBe('not-permitted');
+    expect(
+      classifyStoreError('storage list requires the apps:storage:read scope'),
+    ).toBe('not-permitted');
+    // Near-misses must not be swallowed: the SDK owns every other wording.
+    expect(classifyStoreError(new Error('storage set requires a scope'))).toBe(
+      'unknown',
+    );
+  });
 });

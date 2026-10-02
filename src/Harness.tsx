@@ -7,6 +7,8 @@ import {
 } from '@civitai/blocks-react/testing';
 
 import { mockBuzzBalance } from './mock-buzz.js';
+// TEMPORARY screenshot rig — reverted after screenshots are captured.
+import { SCREENSHOT_SEED } from './dev-screenshot-seed.js';
 
 /**
  * Local dev mock host for the Character Sheet Studio PAGE app.
@@ -63,8 +65,15 @@ export function Harness({ children }: { children: ReactNode }) {
     <div style={rootStyle}>
       <MockBanner />
       <ScenarioPanel onApply={apply} />
-      {/* applyUrlToggles=false: the panel is authoritative once mounted. */}
-      <SdkHarness key={scenarioKey} applyUrlToggles={false} {...scenario} buzzBalance={buzzBalance}>
+      {/* applyUrlToggles=false: the panel is authoritative once mounted.
+          TEMPORARY screenshot rig: merge the demo seed into storage. */}
+      <SdkHarness
+        key={scenarioKey}
+        applyUrlToggles={false}
+        {...scenario}
+        storage={{ ...scenario.storage, seed: { ...SCREENSHOT_SEED, ...scenario.storage?.seed } }}
+        buzzBalance={buzzBalance}
+      >
         {children}
       </SdkHarness>
     </div>
