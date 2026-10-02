@@ -367,3 +367,106 @@ describe('Sheet View priced submits + action feedback', () => {
     expect(published).toBeDisabled();
   });
 });
+
+describe('Character drill-in, sheet previews, generation skeleton', () => {
+  let uninstall: (() => void) | undefined;
+  afterEach(() => {
+    uninstall?.();
+    uninstall = undefined;
+  });
+
+  const sheetWithDonePanel: SheetJob = {
+    id: 'sheet-1',
+    name: 'Kaida sheet',
+    characterId: 'char-1',
+    stackId: 'stack-1',
+    seed: 42,
+    account: 'auto',
+    useReference: false,
+    status: 'complete',
+    panels: [
+      {
+        id: 'p1',
+        kind: 'front',
+        label: 'Front view',
+        promptModifier: 'front view',
+        seed: 42,
+        status: 'done',
+        outputs: ['https://example.com/front.png'],
+        submitNonce: 1,
+      },
+    ],
+    createdAt: '2026-10-01T22:00:00.000Z',
+    updatedAt: '2026-10-01T22:00:00.000Z',
+  };
+
+  it('character card → Sheets (1) lands on the filtered list with a preview thumbnail', async () => {
+    const seed = {
+      'v1:char:char-1': {
+        id: 'char-1',
+        name: 'Kaida',
+        description: 'A cyberpunk street samurai',
+        traits: ['neon-blue undercut hair'],
+        triggerWords: ['kaida_cyber'],
+        negativePrompt: 'blurry, low quality',
+        seedPolicy: 'locked',
+        createdAt: '2026-10-01T22:00:00.000Z',
+        updatedAt: '2026-10-01T22:00:00.000Z',
+      },
+      'v1:sheet:sheet-1': sheetWithDonePanel,
+    };
+    uninstall = installMockMoneyHost({ storage: { seed } });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('Character Sheet Studio');
+
+    const viewSheets = await screen.findByTestId('char-view-sheets');
+    expect(viewSheets).toHaveTextContent('Sheets (1)');
+    await user.click(viewSheets);
+
+    // Filtered to Kaida, with the generated image as the card preview.
+    await screen.findByText(/Sheets for/);
+    expect(screen.getByText('Kaida')).toBeInTheDocument();
+    expect(await screen.findByTestId('sheet-card-thumb')).toHaveAttribute(
+      'src',
+      'https://example.com/front.png',
+    );
+    expect(screen.getByText('Kaida sheet')).toBeInTheDocument();
+
+    // Show all clears the drill-in.
+    await user.click(screen.getByRole('button', { name: 'Show all' }));
+    await waitFor(() => expect(screen.queryByText(/Sheets for/)).not.toBeInTheDocument());
+  });
+
+  it('a running panel shows the generation skeleton, not a blank box', async () => {
+    uninstall = installMockMoneyHost({});
+    render(
+      <SheetView
+        library={stubLibrary({
+          sheets: [
+            {
+              ...sheetWithDonePanel,
+              status: 'running',
+              panels: [
+                {
+                  id: 'p1',
+                  kind: 'front',
+                  label: 'Front view',
+                  promptModifier: 'front view',
+                  seed: 42,
+                  status: 'running',
+                  outputs: [],
+                  submitNonce: 1,
+                },
+              ],
+            },
+          ],
+        })}
+        sheetId="sheet-1"
+        onBack={() => {}}
+      />,
+    );
+    const skeleton = await screen.findByTestId('se-panel-skeleton');
+    expect(skeleton).toHaveAttribute('aria-label', 'Generating Front view');
+  });
+});

@@ -34,6 +34,8 @@ export interface CharactersProps {
   library: SheetLibrary;
   /** Jump to the Sheet Builder with this character preselected. */
   onBuildSheet: (characterId: string) => void;
+  /** Jump to the Sheets tab filtered to this character's sheets. */
+  onViewSheets: (characterId: string) => void;
 }
 
 type EditorState = { mode: 'create' } | { mode: 'edit'; id: string } | null;
@@ -42,7 +44,7 @@ function seedPolicyLabel(p: SeedPolicy): string {
   return p === 'locked' ? 'Locked (reproducible)' : 'Varied (random per panel)';
 }
 
-export function Characters({ library, onBuildSheet }: CharactersProps) {
+export function Characters({ library, onBuildSheet, onViewSheets }: CharactersProps) {
   const [editor, setEditor] = useState<EditorState>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -51,6 +53,12 @@ export function Characters({ library, onBuildSheet }: CharactersProps) {
     editor?.mode === 'edit'
       ? library.characters.find((c) => c.id === editor.id)
       : undefined;
+
+  // Sheet count per character for the "Sheets (N)" card action.
+  const sheetsByCharacter = new Map<string, number>();
+  for (const s of library.sheets) {
+    sheetsByCharacter.set(s.characterId, (sheetsByCharacter.get(s.characterId) ?? 0) + 1);
+  }
 
   const onDelete = async (id: string) => {
     if (confirmDeleteId !== id) {
@@ -145,6 +153,14 @@ export function Characters({ library, onBuildSheet }: CharactersProps) {
               <Group gap="xs">
                 <Button size="sm" variant="light" onClick={() => onBuildSheet(c.id)}>
                   Build sheet
+                </Button>
+                <Button
+                  size="sm"
+                  variant="subtle"
+                  onClick={() => onViewSheets(c.id)}
+                  data-testid="char-view-sheets"
+                >
+                  Sheets ({sheetsByCharacter.get(c.id) ?? 0})
                 </Button>
                 <Button size="sm" variant="subtle" onClick={() => setEditor({ mode: 'edit', id: c.id })}>
                   Edit

@@ -52,6 +52,8 @@ export function App() {
     return t === 'stacks' || t === 'builder' || t === 'sheets' ? t : 'characters';
   });
   const [openSheetId, setOpenSheetId] = useState<string | null>(null);
+  // When set, the Sheets tab lists only this character's sheets.
+  const [sheetsCharFilter, setSheetsCharFilter] = useState<string | null>(null);
   const [preselectedCharacterId, setPreselectedCharacterId] = useState<string | undefined>(
     undefined,
   );
@@ -62,6 +64,12 @@ export function App() {
     setPreselectedCharacterId(characterId);
     setOpenSheetId(null);
     setTab('builder');
+  };
+
+  const viewSheetsFor = (characterId: string) => {
+    setSheetsCharFilter(characterId);
+    setOpenSheetId(null);
+    setTab('sheets');
   };
 
   const openSheet = (sheetId: string) => {
@@ -90,6 +98,9 @@ export function App() {
               onChange={(v) => {
                 setTab(v as Tab);
                 if (v !== 'sheets') setOpenSheetId(null);
+                // Manual navigation resets the character drill-in — the
+                // filter only exists as a target from a character card.
+                setSheetsCharFilter(null);
               }}
               data={TABS}
             />
@@ -104,7 +115,11 @@ export function App() {
         )}
 
         {tab === 'characters' && (
-          <Characters library={library} onBuildSheet={goToBuilder} />
+          <Characters
+            library={library}
+            onBuildSheet={goToBuilder}
+            onViewSheets={viewSheetsFor}
+          />
         )}
         {tab === 'stacks' && <Stacks library={library} />}
         {tab === 'builder' && (
@@ -126,7 +141,9 @@ export function App() {
             <SheetsList
               library={library}
               onOpen={openSheet}
-              onBuild={() => goToBuilder()}
+              onBuild={(characterId) => goToBuilder(characterId)}
+              filterCharacterId={sheetsCharFilter}
+              onClearFilter={() => setSheetsCharFilter(null)}
             />
           ))}
       </Stack>
@@ -138,10 +155,14 @@ function SheetsList({
   library,
   onOpen,
   onBuild,
+  filterCharacterId,
+  onClearFilter,
 }: {
   library: ReturnType<typeof useSheetLibrary>;
   onOpen: (id: string) => void;
-  onBuild: () => void;
+  onBuild: (characterId?: string) => void;
+  filterCharacterId: string | null;
+  onClearFilter: () => void;
 }) {
   if (!library.ready) {
     return (
@@ -150,39 +171,100 @@ function SheetsList({
       </Card>
     );
   }
-  if (library.sheets.length === 0) {
+  const filterCharacter = filterCharacterId
+    ? library.characters.find((c) => c.id === filterCharacterId)
+    : undefined;
+  const visible = filterCharacterId
+    ? library.sheets.filter((s) => s.characterId === filterCharacterId)
+    : library.sheets;
+
+  const filterBanner = filterCharacterId ? (
+    <Group justify="space-between" align="center">
+      <span style={{ fontSize: 14 }}>
+        Sheets for <strong>{filterCharacter?.name ?? 'Unknown character'}</strong>
+      </span>
+      <Button size="sm" variant="subtle" onClick={onClearFilter}>
+        Show all
+      </Button>
+    </Group>
+  ) : null;
+
+  if (visible.length === 0) {
     return (
-      <Card>
-        <Stack gap="sm">
-          <p style={{ margin: 0, opacity: 0.75 }}>
-            No sheets yet. Build one from a character + stack and it’ll appear here —
-            batches resume automatically if you leave mid-run.
-          </p>
-          <div>
-            <Button onClick={onBuild}>Build a sheet</Button>
-          </div>
-        </Stack>
-      </Card>
+      <Stack gap="sm">
+        {filterBanner}
+        <Card>
+          <Stack gap="sm">
+            <p style={{ margin: 0, opacity: 0.75 }}>
+              {filterCharacterId
+                ? `No sheets for ${filterCharacter?.name ?? 'this character'} yet.`
+                : 'No sheets yet. Build one from a character + stack and it’ll appear here — batches resume automatically if you leave mid-run.'}
+            </p>
+            <div>
+              <Button onClick={() => onBuild(filterCharacterId ?? undefined)}>
+                Build a sheet
+              </Button>
+            </div>
+          </Stack>
+        </Card>
+      </Stack>
     );
   }
-  const sorted = [...library.sheets].sort((a, b) =>
-    b.updatedAt.localeCompare(a.updatedAt),
-  );
+  const sorted = [...visible].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return (
     <Stack gap="sm">
+      {filterBanner}
       {sorted.map((sheet) => {
         const done = sheet.panels.filter((p) => p.status === 'done').length;
         const character = library.characters.find((c) => c.id === sheet.characterId);
+        const thumb = sheet.panels.find((p) => p.outputs[0])?.outputs[0];
         return (
           <Card key={sheet.id} padding="sm">
-            <Group justify="space-between" align="center">
-              <Stack gap={2}>
-                <strong style={{ fontSize: 15 }}>{sheet.name}</strong>
-                <span style={{ fontSize: 13, opacity: 0.7 }}>
-                  {character?.name ?? 'Unknown character'} · {done}/{sheet.panels.length}{' '}
-                  panels
-                </span>
-              </Stack>
+            <Group justify="space-between" align="center" wrap={false}>
+              <Group gap="sm" align="center" wrap={false} style={{ minWidth: 0 }}>
+                {thumb ? (
+                  <img
+                    src={thumb}
+                    alt=""
+                    data-testid="sheet-card-thumb"
+                    style={{
+                      width: 64,
+                      height: 64,
+                      objectFit: 'cover',
+                      borderRadius: 8,
+                      flexShrink: 0,
+                      display: 'block',
+                    }}
+                  />
+                ) : (
+                  <div
+                    data-testid="sheet-card-thumb-placeholder"
+                    style={{
+                      width: 64,
+                      height: 64,
+                      borderRadius: 8,
+                      background: 'var(--civitai-color-surface-2)',
+                      flexShrink: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'var(--civitai-color-text-dimmed)',
+                      fontSize: 11,
+                      textAlign: 'center',
+                      padding: 4,
+                    }}
+                  >
+                    No image
+                  </div>
+                )}
+                <Stack gap={2}>
+                  <strong style={{ fontSize: 15 }}>{sheet.name}</strong>
+                  <span style={{ fontSize: 13, opacity: 0.7 }}>
+                    {character?.name ?? 'Unknown character'} · {done}/{sheet.panels.length}{' '}
+                    panels
+                  </span>
+                </Stack>
+              </Group>
               <Group gap="sm" align="center">
                 <Badge
                   color={

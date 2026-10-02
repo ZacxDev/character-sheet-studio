@@ -641,6 +641,24 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
                     alt={panel.label}
                     style={{ width: '100%', borderRadius: 6, display: 'block' }}
                   />
+                ) : panel.status === 'running' ? (
+                  <div
+                    className="css-skeleton"
+                    data-testid="se-panel-skeleton"
+                    role="status"
+                    aria-label={`Generating ${panel.label}`}
+                    style={{
+                      aspectRatio: '1 / 1',
+                      borderRadius: 6,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <span style={{ fontSize: 13, color: 'var(--civitai-color-text-dimmed)' }}>
+                      Generating…
+                    </span>
+                  </div>
                 ) : (
                   <div
                     style={{
@@ -654,7 +672,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
                       fontSize: 13,
                     }}
                   >
-                    {panel.status === 'running' ? <Loader size="sm" /> : 'No image yet'}
+                    No image yet
                   </div>
                 )}
 
