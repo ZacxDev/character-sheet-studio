@@ -397,12 +397,12 @@ export interface SheetPanel extends PanelSpec {
   /** App-owned failure code, never raw server prose. */
   errorCode?: string;
   /**
-   * Incremented on every (re)submit. The idempotency key is
-   * `sheetId-panelId-submitNonce` (dashes — the host rejects anything outside
-   * /^[A-Za-z0-9_-]{1,64}$/): a retry after a lost response reuses the
-   * key (same nonce → the host collapses it to one charge), while a
-   * regenerate bumps the nonce so the orchestrator treats it as a new
-   * logical submit.
+   * Incremented on every (re)submit. The idempotency key is a bounded hash of
+   * sheetId + panelId + submitNonce (the host rejects anything outside
+   * /^[A-Za-z0-9_-]{1,64}$/, and raw UUIDs would exceed that joined): a
+   * retry after a lost response reuses the key (same nonce → the host
+   * collapses it to one charge), while a regenerate bumps the nonce so the
+   * orchestrator treats it as a new logical submit.
    */
   submitNonce: number;
 }
