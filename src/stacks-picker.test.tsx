@@ -1,11 +1,13 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { App } from './App.js';
 import { installMockMoneyHost } from './mock-buzz.js';
+import { Characters } from './screens/Characters.js';
 import { SheetBuilder } from './screens/SheetBuilder.js';
 import { SheetView } from './screens/SheetView.js';
+import { Stacks } from './screens/Stacks.js';
 import {
   DEFAULT_SETTINGS,
   type Character,
@@ -158,6 +160,7 @@ describe('Sheet Builder panel gate + guest pricing', () => {
         preselectedCharacterId={null}
         onOpenSheet={() => {}}
         onCreateStack={() => {}}
+        onCreateCharacter={() => {}}
       />,
     );
 
@@ -191,6 +194,7 @@ describe('Sheet Builder panel gate + guest pricing', () => {
         preselectedCharacterId={null}
         onOpenSheet={() => {}}
         onCreateStack={() => {}}
+        onCreateCharacter={() => {}}
       />,
     );
 
@@ -468,5 +472,280 @@ describe('Character drill-in, sheet previews, generation skeleton', () => {
     );
     const skeleton = await screen.findByTestId('se-panel-skeleton');
     expect(skeleton).toHaveAttribute('aria-label', 'Generating Front view');
+  });
+});
+
+describe('Batch B/C leftovers', () => {
+  let uninstall: (() => void) | undefined;
+  afterEach(() => {
+    uninstall?.();
+    uninstall = undefined;
+  });
+
+  it('Builder with no characters walls into character creation', async () => {
+    uninstall = installMockMoneyHost({});
+    const user = userEvent.setup();
+    const onCreateCharacter = vi.fn();
+    render(
+      <SheetBuilder
+        library={stubLibrary({ characters: [] })}
+        preselectedCharacterId={null}
+        onOpenSheet={() => {}}
+        onCreateStack={() => {}}
+        onCreateCharacter={onCreateCharacter}
+      />,
+    );
+    await user.click(await screen.findByTestId('builder-create-character'));
+    expect(onCreateCharacter).toHaveBeenCalledTimes(1);
+  });
+
+  const seedChar = {
+    id: 'char-1',
+    name: 'Kaida',
+    description: 'A cyberpunk street samurai',
+    traits: ['neon-blue undercut hair'],
+    triggerWords: ['kaida_cyber'],
+    negativePrompt: 'blurry, low quality',
+    seedPolicy: 'locked',
+    createdAt: '2026-10-01T22:00:00.000Z',
+    updatedAt: '2026-10-01T22:00:00.000Z',
+  };
+  const sheetShell = {
+    name: 'Paused sheet',
+    characterId: 'char-1',
+    stackId: 'stack-1',
+    seed: 42,
+    account: 'auto',
+    useReference: false,
+    createdAt: '2026-10-01T22:00:00.000Z',
+    updatedAt: '2026-10-01T22:00:00.000Z',
+  };
+
+  it('human status labels everywhere + Sheets tab exits an open sheet', async () => {
+    const seed = {
+      'v1:char:char-1': seedChar,
+      'v1:sheet:sheet-paused': {
+        ...sheetShell,
+        id: 'sheet-paused',
+        status: 'paused',
+        panels: [
+          {
+            id: 'p1', kind: 'front', label: 'Front view', promptModifier: 'front',
+            seed: 42, status: 'done', outputs: ['https://example.com/front.png'],
+            submitNonce: 1,
+          },
+          {
+            id: 'p2', kind: 'side', label: 'Side view', promptModifier: 'side',
+            seed: 42, status: 'queued', outputs: [], submitNonce: 0,
+          },
+        ],
+      },
+      'v1:sheet:sheet-draft': {
+        ...sheetShell,
+        id: 'sheet-draft',
+        name: 'Draft sheet',
+        status: 'draft',
+        panels: [
+          {
+            id: 'p3', kind: 'front', label: 'Front view', promptModifier: 'front',
+            seed: 42, status: 'queued', outputs: [], submitNonce: 0,
+          },
+        ],
+      },
+    };
+    uninstall = installMockMoneyHost({ storage: { seed } });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('Character Sheet Studio');
+
+    // Drill in from the character card (2 sheets).
+    const viewSheets = await screen.findByTestId('char-view-sheets');
+    expect(viewSheets).toHaveTextContent('Sheets (2)');
+    await user.click(viewSheets);
+
+    // Human labels, not raw statuses.
+    expect(await screen.findByText('Partially done')).toBeInTheDocument();
+    expect(screen.getByText('Not started')).toBeInTheDocument();
+    expect(screen.queryByText('paused')).not.toBeInTheDocument();
+    expect(screen.queryByText('draft')).not.toBeInTheDocument();
+
+    // Open the paused sheet — header uses the same human label.
+    const openBtns = await screen.findAllByRole('button', { name: 'Open' });
+    const pausedRow = openBtns.find((b) =>
+      b.closest('[data-civitai-ui="card"]')?.textContent?.includes('Paused sheet'),
+    );
+    await user.click(pausedRow ?? openBtns[0]);
+    await screen.findByText('Paused sheet');
+    expect(screen.getAllByText('Partially done').length).toBeGreaterThan(0);
+
+    // Clicking the already-active Sheets tab returns to the list.
+    await user.click(screen.getByRole('tab', { name: 'Sheets' }));
+    expect((await screen.findAllByRole('button', { name: 'Open' })).length).toBe(2);
+  });
+
+  it('Submit all queued prices once, confirms the total, then submits every panel', async () => {
+    const outbound: { type?: string }[] = [];
+    uninstall = installMockMoneyHost({ onOutbound: (m) => outbound.push(m) });
+    const user = userEvent.setup();
+    const queuedSheet: SheetJob = {
+      id: 'sheet-q',
+      name: 'Queued batch',
+      characterId: 'char-1',
+      stackId: 'stack-1',
+      seed: 42,
+      account: 'auto',
+      useReference: false,
+      status: 'draft',
+      panels: [
+        {
+          id: 'qp1', kind: 'front', label: 'Front view', promptModifier: 'front view',
+          seed: 42, status: 'queued', outputs: [], submitNonce: 0,
+        },
+        {
+          id: 'qp2', kind: 'side', label: 'Side view', promptModifier: 'side view',
+          seed: 42, status: 'queued', outputs: [], submitNonce: 0,
+        },
+      ],
+      createdAt: '2026-10-01T22:00:00.000Z',
+      updatedAt: '2026-10-01T22:00:00.000Z',
+    };
+    render(
+      <SheetView
+        library={stubLibrary({ sheets: [queuedSheet] })}
+        sheetId="sheet-q"
+        onBack={() => {}}
+      />,
+    );
+
+    // Human label in the header, batch CTA counts the queued panels.
+    expect(await screen.findByText('Not started')).toBeInTheDocument();
+    const batchBtn = await screen.findByTestId('se-submit-all');
+    expect(batchBtn).toHaveTextContent('Submit all queued (2)');
+
+    await user.click(batchBtn);
+    const confirm = await screen.findByTestId('se-submit-all-confirm');
+    // Mock estimates at 8 Buzz per panel.
+    expect(confirm).toHaveTextContent('≈16 Buzz');
+    expect(outbound.filter((m) => m.type === 'ESTIMATE_WORKFLOW')).toHaveLength(2);
+    expect(outbound.some((m) => m.type === 'SUBMIT_WORKFLOW')).toBe(false);
+
+    await user.click(screen.getByTestId('se-submit-all-confirm-submit'));
+    await waitFor(() =>
+      expect(outbound.filter((m) => m.type === 'SUBMIT_WORKFLOW')).toHaveLength(2),
+    );
+    // Both panels run to completion under the mock host (poll backoff).
+    await waitFor(() => expect(screen.queryByTestId('se-submit-all')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Done')).toHaveLength(2), {
+      timeout: 15000,
+    });
+  });
+
+  it('stack editor: duplicate LoRA pick says so; mismatched family warns', async () => {
+    const detailLora = {
+      modelVersionId: 777,
+      strength: 1,
+      triggerWords: [] as string[],
+      name: 'Detail Booster — v1',
+      baseModel: 'SDXL 1.0',
+    };
+    uninstall = installMockMoneyHost({
+      cannedPicks: {
+        LORA: {
+          versionId: 777,
+          modelId: 55,
+          modelName: 'Detail Booster',
+          versionName: 'v1',
+          baseModel: 'SDXL 1.0',
+          modelType: 'LORA',
+          trainedWords: [],
+        },
+      },
+    });
+    const user = userEvent.setup();
+    render(
+      <Stacks
+        library={stubLibrary({
+          stacks: [{ ...demoStack, loras: [detailLora] }],
+        })}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(await screen.findByText('LoRAs (1/5)')).toBeInTheDocument();
+
+    // Re-picking the stacked LoRA surfaces feedback instead of a silent no-op.
+    await user.click(screen.getByRole('button', { name: 'Add LoRA' }));
+    const notice = await screen.findByTestId('stack-lora-notice');
+    expect(notice).toHaveTextContent('already in this stack');
+    expect(screen.getByText('LoRAs (1/5)')).toBeInTheDocument();
+
+    // No mismatch while families agree.
+    expect(screen.queryByTestId('stack-lora-mismatch')).not.toBeInTheDocument();
+  });
+
+  it('stack editor warns when a LoRA family mismatches the checkpoint', async () => {
+    uninstall = installMockMoneyHost({});
+    const user = userEvent.setup();
+    const ponyStack: ModelStack = {
+      ...demoStack,
+      id: 'stack-pony',
+      name: 'Pony stack',
+      checkpoint: { modelId: 7, modelVersionId: 9, baseModel: 'Pony', name: 'Pony XL' },
+      loras: [
+        {
+          modelVersionId: 777,
+          strength: 1,
+          triggerWords: [],
+          name: 'Detail Booster — v1',
+          baseModel: 'SDXL 1.0',
+        },
+      ],
+    };
+    render(<Stacks library={stubLibrary({ stacks: [ponyStack] })} />);
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const warn = await screen.findByTestId('stack-lora-mismatch');
+    expect(warn).toHaveTextContent('SDXL 1.0');
+    expect(warn).toHaveTextContent('Pony');
+    // Checkpoint label shows the name without re-appending its family.
+    expect(screen.getAllByText('Pony XL').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Pony XL \(Pony\)/)).not.toBeInTheDocument();
+  });
+
+  it('delete confirmations say what happens to the sheets', async () => {
+    uninstall = installMockMoneyHost({});
+    const user = userEvent.setup();
+    const sheet: SheetJob = {
+      id: 'sheet-1',
+      name: 'Kaida sheet',
+      characterId: 'char-1',
+      stackId: 'stack-1',
+      seed: 42,
+      account: 'auto',
+      useReference: false,
+      status: 'complete',
+      panels: [
+        {
+          id: 'p1', kind: 'front', label: 'Front view', promptModifier: 'front',
+          seed: 42, status: 'done', outputs: ['https://example.com/f.png'],
+          submitNonce: 1,
+        },
+      ],
+      createdAt: '2026-10-01T22:00:00.000Z',
+      updatedAt: '2026-10-01T22:00:00.000Z',
+    };
+    const library = stubLibrary({ sheets: [sheet] });
+    const { unmount } = render(
+      <Characters library={library} onBuildSheet={() => {}} onViewSheets={() => {}} />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(
+      await screen.findByText(/keep their\s+images, labeled “Unknown character”/),
+    ).toBeInTheDocument();
+    unmount();
+
+    render(<Stacks library={library} />);
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(
+      await screen.findByText(/keep\s+their images, labeled “Unknown stack”/),
+    ).toBeInTheDocument();
   });
 });

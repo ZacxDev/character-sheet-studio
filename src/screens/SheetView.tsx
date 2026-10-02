@@ -52,6 +52,7 @@ import {
   type PanelErrorCode,
 } from '../sheet/batch.js';
 import type { SheetJob, SheetPanel } from '../sheet/types.js';
+import { SHEET_STATUS_LABEL } from '../sheet/types.js';
 import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
 import { storeErrorMessage } from './common.js';
 
@@ -123,6 +124,14 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
     cost: number;
     next: SheetPanel;
   } | null>(null);
+  // "Submit all queued": every queued panel is priced up front and parked
+  // behind ONE confirm showing the total, then submitted sequentially.
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchConfirm, setBatchConfirm] = useState<{
+    items: { panelId: string; next: SheetPanel }[];
+    total: number;
+  } | null>(null);
+  const submitAllIntentRef = useRef(false);
 
   const sheetRef = useRef(sheet);
   sheetRef.current = sheet;
@@ -286,6 +295,68 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
   const pricePanelRef = useRef(pricePanel);
   pricePanelRef.current = pricePanel;
 
+  /**
+   * Price every queued panel (never submitted, no workflow id). Each panel
+   * that prices clean joins ONE parked confirm with the summed total;
+   * priced refusals fail their own panel, exactly like a single submit.
+   */
+  const priceSubmitAll = useCallback(async () => {
+    const cur = sheetRef.current;
+    const character = library.characters.find((c) => c.id === cur?.characterId);
+    const stack = library.stacks.find((s) => s.id === cur?.stackId);
+    if (!cur || !character || !stack) {
+      setError('The sheet is gone — go back and reopen it.');
+      return;
+    }
+    const queued = cur.panels.filter((p) => p.status === 'queued' && !p.workflowId);
+    if (queued.length === 0) return;
+    setBatchBusy(true);
+    setError(null);
+    setBatchConfirm(null);
+    setPanelConfirm(null);
+    const items: { panelId: string; next: SheetPanel }[] = [];
+    let total = 0;
+    try {
+      for (const panel of queued) {
+        // Same prepared-state rule as a single retry: the submitted body is
+        // byte-identical to the estimated one (nonce untouched — a queued
+        // panel was never submitted, so its key must stay stable).
+        const next: SheetPanel = {
+          ...panel,
+          status: 'running',
+          workflowId: undefined,
+          outputs: [],
+          errorCode: undefined,
+        };
+        const body = buildSheetPanelBody(next, character, stack, library.settings, {
+          account: cur.account,
+          useReference: cur.useReference,
+        });
+        try {
+          const est: BlockWorkflowSnapshot = await estimate(body);
+          const cost = est.cost?.total;
+          if (est.status === 'failed' || est.error || typeof cost !== 'number') {
+            await failPanel(panel.id, pricedKindToErrorCode(classifyPricedFailure(est.error)));
+            continue;
+          }
+          items.push({ panelId: panel.id, next });
+          total += cost;
+        } catch {
+          await failPanel(panel.id, 'estimate-failed');
+        }
+      }
+    } finally {
+      setBatchBusy(false);
+    }
+    if (items.length === 0) {
+      setError('Couldn’t price the queued panels — each one shows its own error on its card.');
+      return;
+    }
+    setBatchConfirm({ items, total });
+  }, [estimate, failPanel, library]);
+  const priceSubmitAllRef = useRef(priceSubmitAll);
+  priceSubmitAllRef.current = priceSubmitAll;
+
   /** Submit the prepared panel state (the exact body the viewer priced). */
   const runPanelSubmit = useCallback(
     async (panelId: string, next: SheetPanel) => {
@@ -376,6 +447,16 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
     setPanelConfirm(null);
     void runPanelSubmitRef.current(c.panelId, c.next);
   }, [panelConfirm]);
+
+  /** Submit the priced batch sequentially; each submit starts its own poll. */
+  const confirmSubmitAll = useCallback(async () => {
+    const c = batchConfirm;
+    if (!c) return;
+    setBatchConfirm(null);
+    for (const item of c.items) {
+      await runPanelSubmitRef.current(item.panelId, item.next);
+    }
+  }, [batchConfirm]);
   const pollCancelsRef = useRef<Array<() => void>>([]);
   useEffect(() => {
     const cancels = pollCancelsRef.current;
@@ -400,13 +481,30 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
     [anon, granted, requestConsentFor, requestSignIn],
   );
 
+  const startSubmitAll = useCallback(() => {
+    if (anon) {
+      requestSignIn();
+      return;
+    }
+    if (!granted) {
+      submitAllIntentRef.current = true;
+      setConsentWait(true);
+      requestConsent({ scopes: [BUDGETED_SCOPE] });
+      return;
+    }
+    void priceSubmitAllRef.current();
+  }, [anon, granted, requestConsent, requestSignIn]);
+
   // Auto-resume the waiting intent after a consent grant.
   useEffect(() => {
     const intent = consentIntentRef.current;
-    if (granted && intent) {
+    const wantSubmitAll = submitAllIntentRef.current;
+    if (granted && (intent || wantSubmitAll)) {
       consentIntentRef.current = null;
+      submitAllIntentRef.current = false;
       setConsentWait(false);
-      void pricePanelRef.current(intent.panelId, intent.mode);
+      if (intent) void pricePanelRef.current(intent.panelId, intent.mode);
+      else void priceSubmitAllRef.current();
     }
   }, [granted]);
 
@@ -414,6 +512,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
   useEffect(() => {
     if (refusal && consentWait) {
       consentIntentRef.current = null;
+      submitAllIntentRef.current = false;
       setConsentWait(false);
       setError(
         'Spending approval isn’t available in this environment, so panels can’t be regenerated here.',
@@ -541,6 +640,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
   const character = library.characters.find((c) => c.id === sheet.characterId);
   const stack = library.stacks.find((s) => s.id === sheet.stackId);
   const doneCount = sheet.panels.filter((p) => p.status === 'done').length;
+  const queuedPanels = sheet.panels.filter((p) => p.status === 'queued' && !p.workflowId);
 
   return (
     <Stack gap="md">
@@ -598,17 +698,66 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
           </div>
           <div>
             <Badge color={sheet.status === 'complete' ? 'success' : sheet.status === 'failed' ? 'error' : 'info'}>
-              {sheet.status}
+              {SHEET_STATUS_LABEL[sheet.status]}
             </Badge>
           </div>
         </Stack>
       </Card>
+
+      {confirmDelete && (
+        <p style={{ margin: 0, fontSize: 13, opacity: 0.75 }}>
+          This deletes the sheet and its panel records — generated images stay
+          in your Civitai creations.
+        </p>
+      )}
 
       {error && <Alert color="error">{error}</Alert>}
       {consentWait && (
         <Alert color="info">
           <Loader size="sm" /> Waiting for your approval in the Civitai dialog…
         </Alert>
+      )}
+
+      {batchConfirm ? (
+        <Card padding="sm" data-testid="se-submit-all-confirm">
+          <Group gap="sm" align="center" wrap>
+            <span style={{ fontSize: 14 }}>
+              Submit {batchConfirm.items.length} queued panel
+              {batchConfirm.items.length === 1 ? '' : 's'}?
+            </span>
+            <Badge variant="light">≈{formatCost(batchConfirm.total)} Buzz</Badge>
+            <Button
+              size="sm"
+              onClick={() => void confirmSubmitAll()}
+              data-testid="se-submit-all-confirm-submit"
+            >
+              Submit
+            </Button>
+            <Button size="sm" variant="subtle" onClick={() => setBatchConfirm(null)}>
+              Cancel
+            </Button>
+          </Group>
+        </Card>
+      ) : (
+        queuedPanels.length > 0 && (
+          <Card padding="sm">
+            <Group justify="space-between" align="center" wrap>
+              <span style={{ fontSize: 14 }}>
+                {queuedPanels.length} panel{queuedPanels.length === 1 ? '' : 's'}{' '}
+                queued — price them together, submit one by one.
+              </span>
+              <Button
+                size="sm"
+                loading={batchBusy}
+                disabled={batchBusy || busyPanel !== null}
+                onClick={startSubmitAll}
+                data-testid="se-submit-all"
+              >
+                Submit all queued ({queuedPanels.length})
+              </Button>
+            </Group>
+          </Card>
+        )
       )}
 
       <div

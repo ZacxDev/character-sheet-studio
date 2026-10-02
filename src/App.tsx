@@ -20,6 +20,7 @@ import {
 } from '@civitai/blocks-react/ui';
 
 import { useSheetLibrary } from './sheet/useSheetLibrary.js';
+import { SHEET_STATUS_LABEL } from './sheet/types.js';
 import { Characters } from './screens/Characters.js';
 import { Stacks } from './screens/Stacks.js';
 import { SheetBuilder } from './screens/SheetBuilder.js';
@@ -102,6 +103,20 @@ export function App() {
                 // filter only exists as a target from a character card.
                 setSheetsCharFilter(null);
               }}
+              onClick={(e) => {
+                // Clicking the ALREADY-active Sheets tab fires no onChange,
+                // but the viewer means "back to the list" — exit the open
+                // sheet / drill-in instead of doing nothing.
+                if (tab !== 'sheets') return;
+                const t = e.target as HTMLElement;
+                const v =
+                  t.closest?.('[data-value]')?.getAttribute('data-value') ??
+                  t.closest?.('button, label')?.textContent?.trim().toLowerCase();
+                if (v === 'sheets') {
+                  setOpenSheetId(null);
+                  setSheetsCharFilter(null);
+                }
+              }}
               data={TABS}
             />
           </Group>
@@ -128,6 +143,7 @@ export function App() {
             preselectedCharacterId={preselectedCharacterId ?? null}
             onOpenSheet={openSheet}
             onCreateStack={() => setTab('stacks')}
+            onCreateCharacter={() => setTab('characters')}
           />
         )}
         {tab === 'sheets' &&
@@ -276,7 +292,7 @@ function SheetsList({
                   }
                   variant="light"
                 >
-                  {sheet.status}
+                  {SHEET_STATUS_LABEL[sheet.status]}
                 </Badge>
                 <Button size="sm" variant="subtle" onClick={() => onOpen(sheet.id)}>
                   Open

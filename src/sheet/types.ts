@@ -181,6 +181,12 @@ export interface StackLora {
   strength: number;
   triggerWords: string[];
   name?: string;
+  /**
+   * The LoRA's base-model family (captured at pick time). Optional so stacks
+   * saved before this field existed stay valid — an unknown family simply
+   * can't be mismatch-warned about.
+   */
+  baseModel?: string;
 }
 
 export interface ModelStack {
@@ -208,11 +214,13 @@ function normalizeStackLora(v: unknown): StackLora | null {
   const modelVersionId = asInt(v.modelVersionId);
   if (modelVersionId === null || modelVersionId <= 0) return null;
   const name = asNonEmptyString(v.name) ?? undefined;
+  const baseModel = asNonEmptyString(v.baseModel) ?? undefined;
   return {
     modelVersionId,
     strength: clampLoraStrength(asNumber(v.strength) ?? 1),
     triggerWords: asStringArray(v.triggerWords),
     ...(name ? { name } : {}),
+    ...(baseModel ? { baseModel } : {}),
   };
 }
 
@@ -436,6 +444,15 @@ function normalizeSheetPanel(v: unknown): SheetPanel | null {
 // --- SheetJob ------------------------------------------------------------------
 
 export type SheetStatus = 'draft' | 'running' | 'paused' | 'complete' | 'failed';
+
+/** User-facing sheet status words (raw status values never reach the UI). */
+export const SHEET_STATUS_LABEL: Record<SheetStatus, string> = {
+  draft: 'Not started',
+  running: 'Generating',
+  paused: 'Partially done',
+  complete: 'Complete',
+  failed: 'Failed',
+};
 
 export function isSheetStatus(v: unknown): v is SheetStatus {
   return (

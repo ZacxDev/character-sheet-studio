@@ -73,6 +73,8 @@ export interface SheetBuilderProps {
   onOpenSheet: (sheetId: string) => void;
   /** Take the viewer to the Stacks tab so they can create a stack. */
   onCreateStack: () => void;
+  /** Take the viewer to the Characters tab so they can create a character. */
+  onCreateCharacter: () => void;
 }
 
 type BuilderPhase =
@@ -93,7 +95,7 @@ function randomSeed(): number {
   return 100000 + Math.floor(Math.random() * 900000);
 }
 
-export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onCreateStack }: SheetBuilderProps) {
+export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onCreateStack, onCreateCharacter }: SheetBuilderProps) {
   const { ready, viewer } = useBlockContext();
   const token = useBlockToken();
   const { balance } = useBuzzBalance();
@@ -466,9 +468,17 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
   if (library.characters.length === 0) {
     return (
       <Card>
-        <p style={{ margin: 0, opacity: 0.75 }}>
-          Create a character first — then come back to build a sheet from it.
-        </p>
+        <Stack gap="sm">
+          <p style={{ margin: 0, opacity: 0.75 }}>
+            Sheets are built from a character — you don’t have one yet, so
+            let’s fix that first.
+          </p>
+          <div>
+            <Button onClick={onCreateCharacter} data-testid="builder-create-character">
+              Create a character
+            </Button>
+          </div>
+        </Stack>
       </Card>
     );
   }
@@ -577,7 +587,9 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
                       }
                     />
                     <span style={{ fontWeight: 500 }}>{spec.label}</span>
-                    <Badge size="sm" variant="outline">{spec.kind}</Badge>
+                    <Badge size="sm" variant="outline" style={{ textTransform: 'capitalize' }}>
+                      {spec.kind}
+                    </Badge>
                   </label>
                 ))}
               </Stack>

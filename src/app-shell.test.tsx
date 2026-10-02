@@ -48,10 +48,15 @@ describe('App shell smoke test', () => {
     await user.click(screen.getByRole('tab', { name: 'Stacks' }));
     await waitFor(() => expect(screen.getByText(/No stacks yet/)).toBeInTheDocument());
 
-    // Sheet Builder tab: with no characters it gates on character creation.
+    // Sheet Builder tab: with no characters it gates on character creation —
+    // and its CTA switches straight to the Characters tab.
     await user.click(screen.getByRole('tab', { name: 'Sheet Builder' }));
     await waitFor(() =>
-      expect(screen.getByText(/Create a character first/)).toBeInTheDocument(),
+      expect(screen.getByText(/built from a character/)).toBeInTheDocument(),
+    );
+    await user.click(screen.getByTestId('builder-create-character'));
+    await waitFor(() =>
+      expect(screen.getByText(/No characters yet/)).toBeInTheDocument(),
     );
 
     // Sheets tab.

@@ -37,6 +37,7 @@ import {
 } from '../sheet/types.js';
 import {
   DEFAULT_CHECKPOINT,
+  checkpointDisplayLabel,
   pickedCheckpointLabel,
   type PickedResource,
 } from '../models.js';
@@ -80,6 +81,7 @@ function loraFromPick(info: BlockResourceInfo): StackLora {
     strength: clampLoraStrength(info.strength ?? 1),
     triggerWords: Array.isArray(info.trainedWords) ? info.trainedWords : [],
     name: loraLabel(info),
+    baseModel: info.baseModel,
   };
 }
 
@@ -87,6 +89,12 @@ export function Stacks({ library }: StacksProps) {
   const [editor, setEditor] = useState<EditorState>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Sheet count per stack — what a delete would orphan.
+  const sheetsByStack = new Map<string, number>();
+  for (const s of library.sheets) {
+    sheetsByStack.set(s.stackId, (sheetsByStack.get(s.stackId) ?? 0) + 1);
+  }
 
   const onDelete = async (id: string) => {
     if (confirmDeleteId !== id) {
@@ -142,8 +150,7 @@ export function Stacks({ library }: StacksProps) {
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 600 }}>{s.name}</div>
                 <div style={{ fontSize: 13, opacity: 0.75 }}>
-                  {s.checkpoint.name ?? `Model #${s.checkpoint.modelVersionId}`} ·{' '}
-                  {s.checkpoint.baseModel}
+                  {checkpointDisplayLabel(s.checkpoint)}
                 </div>
                 <Group gap="xs" style={{ marginTop: 6 }}>
                   <Badge size="sm" variant="light">
@@ -170,6 +177,13 @@ export function Stacks({ library }: StacksProps) {
                 </Button>
               </Group>
             </Group>
+            {confirmDeleteId === s.id && (sheetsByStack.get(s.id) ?? 0) > 0 && (
+              <p style={{ margin: '8px 0 0', fontSize: 13, opacity: 0.75 }}>
+                Deleting this stack won’t delete its {sheetsByStack.get(s.id)}{' '}
+                sheet{(sheetsByStack.get(s.id) ?? 0) === 1 ? '' : 's'} — they keep
+                their images, labeled “Unknown stack”.
+              </p>
+            )}
           </Card>
         ))}
       </Stack>
@@ -197,6 +211,9 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
+  // Transient feedback for a picker round-trip that changed nothing (e.g. a
+  // duplicate LoRA pick) — a silent no-op here reads as a broken button.
+  const [loraNotice, setLoraNotice] = useState<string | null>(null);
 
   const { open: openResourcePicker } = useResourcePicker();
   const { fetch: fetchResources } = useGenerationResources();
@@ -212,7 +229,9 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
   // (older save, partial write), refresh it without reopening the pickers.
   // Strengths are NEVER touched — those are the user's.
   useEffect(() => {
-    const missing = loras.filter((l) => !l.name).map((l) => l.modelVersionId);
+    const missing = loras
+      .filter((l) => !l.name || !l.baseModel)
+      .map((l) => l.modelVersionId);
     const needCheckpoint = !checkpoint.name;
     if (missing.length === 0 && !needCheckpoint) return;
     let cancelled = false;
@@ -228,7 +247,12 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
           setLoras((cur) =>
             cur.map((l) => {
               const info = byId.get(l.modelVersionId);
-              return info && !l.name ? { ...l, name: loraLabel(info) } : l;
+              if (!info) return l;
+              return {
+                ...l,
+                ...(l.name ? {} : { name: loraLabel(info) }),
+                ...(l.baseModel ? {} : { baseModel: info.baseModel }),
+              };
             }),
           );
         }
@@ -252,6 +276,13 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
     // Run once per editor mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // LoRAs whose family doesn't match the checkpoint (possible after a
+  // checkpoint swap — the picker only constrains NEW picks). The server may
+  // silently ignore these, so warn before the user pays to find out.
+  const mismatchedLoras = loras.filter(
+    (l) => l.baseModel && l.baseModel !== checkpoint.baseModel,
+  );
 
   const nameError = touched && name.trim() === '' ? 'Give the stack a name.' : undefined;
 
@@ -277,11 +308,15 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
         baseModelGroup: checkpoint.baseModel,
       });
       if (!picked) return;
-      setLoras((cur) => {
-        if (cur.some((l) => l.modelVersionId === picked.versionId)) return cur;
-        if (cur.length >= MAX_LORAS_PER_STACK) return cur;
-        return [...cur, loraFromPick(picked)];
-      });
+      // Same version already stacked: say so instead of silently deduping.
+      if (loras.some((l) => l.modelVersionId === picked.versionId)) {
+        setLoraNotice(`“${loraLabel(picked)}” is already in this stack.`);
+        return;
+      }
+      setLoraNotice(null);
+      setLoras((cur) =>
+        cur.length >= MAX_LORAS_PER_STACK ? cur : [...cur, loraFromPick(picked)],
+      );
     } finally {
       setPickerBusy(false);
     }
@@ -348,9 +383,7 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
         <div>
           <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>Checkpoint</div>
           <Group gap="sm" align="center">
-            <span style={{ fontSize: 14 }}>
-              {checkpoint.name ?? `Model #${checkpoint.modelVersionId}`} ({checkpoint.baseModel})
-            </span>
+            <span style={{ fontSize: 14 }}>{checkpointDisplayLabel(checkpoint)}</span>
             <Button size="sm" variant="light" loading={pickerBusy} onClick={() => void onChangeCheckpoint()} data-testid="stack-checkpoint-change">
               Change
             </Button>
@@ -372,15 +405,35 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
               Add LoRA
             </Button>
           </Group>
+          {loraNotice && (
+            <div
+              role="status"
+              data-testid="stack-lora-notice"
+              style={{ fontSize: 13, marginBottom: 6, color: 'var(--civitai-color-text-dimmed)' }}
+            >
+              {loraNotice}
+            </div>
+          )}
+          {mismatchedLoras.length > 0 && (
+            <Alert color="warning" data-testid="stack-lora-mismatch">
+              {mismatchedLoras.length} LoRA{mismatchedLoras.length === 1 ? '' : 's'}{' '}
+              target{ mismatchedLoras.length === 1 ? 's' : ''}{' '}
+              {[...new Set(mismatchedLoras.map((l) => l.baseModel))].join(', ')} but
+              this checkpoint is {checkpoint.baseModel} — mismatched LoRAs are
+              usually ignored at generation.
+            </Alert>
+          )}
           <Stack gap="xs">
             {loras.map((l) => (
               <Card key={l.modelVersionId} padding="sm">
                 <Group justify="space-between" align="center">
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: 14, fontWeight: 500 }}>{l.name ?? `LoRA #${l.modelVersionId}`}</div>
-                    {l.triggerWords.length > 0 && (
+                    {(l.baseModel || l.triggerWords.length > 0) && (
                       <div style={{ fontSize: 12, opacity: 0.65 }}>
-                        {l.triggerWords.join(', ')}
+                        {[l.baseModel, l.triggerWords.join(', ')]
+                          .filter(Boolean)
+                          .join(' · ')}
                       </div>
                     )}
                     <Slider

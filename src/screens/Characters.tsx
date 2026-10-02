@@ -175,6 +175,13 @@ export function Characters({ library, onBuildSheet, onViewSheets }: CharactersPr
                 </Button>
               </Group>
             </Group>
+            {confirmDeleteId === c.id && (sheetsByCharacter.get(c.id) ?? 0) > 0 && (
+              <p style={{ margin: '8px 0 0', fontSize: 13, opacity: 0.75 }}>
+                Deleting {c.name} won’t delete their sheets — {sheetsByCharacter.get(c.id)}{' '}
+                sheet{(sheetsByCharacter.get(c.id) ?? 0) === 1 ? '' : 's'} keep their
+                images, labeled “Unknown character”.
+              </p>
+            )}
           </Card>
         ))}
       </Stack>
