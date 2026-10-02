@@ -398,6 +398,14 @@ export interface SheetPanel extends PanelSpec {
   id: string;
   /** Per-panel seed: sheet seed + panel index offset (locked) or random (varied). */
   seed: number;
+  /**
+   * AI-enhanced prompt (via the chat-completion step in the Builder). When
+   * set, the composer uses it VERBATIM as the generation prompt — it was
+   * rewritten from the fully-composed prompt, so identity clauses and trigger
+   * words are already inside it. Stored on the panel so regenerates stay
+   * byte-identical to the original run.
+   */
+  enhancedPrompt?: string;
   /** Set once submitted — the resumability anchor. */
   workflowId?: string;
   status: PanelStatus;
@@ -406,6 +414,10 @@ export interface SheetPanel extends PanelSpec {
   errorCode?: string;
   /** Set after a successful Publish — the panel shows a persistent marker. */
   published?: boolean;
+  /** Set after this panel joined a Civitai post (Post button) — persistent marker. */
+  posted?: boolean;
+  /** URL of the Civitai post this panel's image landed in. */
+  postUrl?: string;
   /**
    * Incremented on every (re)submit. The idempotency key is a bounded hash of
    * sheetId + panelId + submitNonce (the host rejects anything outside
@@ -426,17 +438,22 @@ function normalizeSheetPanel(v: unknown): SheetPanel | null {
   const status = isPanelStatus(v.status) ? v.status : 'queued';
   const workflowId = asNonEmptyString(v.workflowId) ?? undefined;
   const errorCode = asNonEmptyString(v.errorCode) ?? undefined;
+  const enhancedPrompt = asNonEmptyString(v.enhancedPrompt) ?? undefined;
+  const postUrl = asNonEmptyString(v.postUrl) ?? undefined;
   return {
     id,
     kind: v.kind,
     label: asNonEmptyString(v.label) ?? PANEL_LABELS[v.kind],
     promptModifier: asString(v.promptModifier) ?? '',
     seed,
+    ...(enhancedPrompt ? { enhancedPrompt } : {}),
     ...(workflowId ? { workflowId } : {}),
     status,
     outputs: asStringArray(v.outputs),
     ...(errorCode ? { errorCode } : {}),
     ...(v.published === true ? { published: true } : {}),
+    ...(v.posted === true ? { posted: true } : {}),
+    ...(postUrl ? { postUrl } : {}),
     submitNonce: asInt(v.submitNonce) ?? 0,
   };
 }
@@ -477,6 +494,8 @@ export interface SheetJob {
   useReference: boolean;
   status: SheetStatus;
   panels: SheetPanel[];
+  /** URL of the Civitai post created by "Post sheet" (all done panels at once). */
+  postUrl?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -499,6 +518,7 @@ export function normalizeSheetJob(v: unknown): SheetJob | null {
   }
   if (panels.length === 0) return null;
   const account = v.account === 'blue' || v.account === 'green' || v.account === 'yellow' ? v.account : 'auto';
+  const postUrl = asNonEmptyString(v.postUrl) ?? undefined;
   return {
     id,
     name: asNonEmptyString(v.name) ?? 'Untitled sheet',
@@ -509,6 +529,7 @@ export function normalizeSheetJob(v: unknown): SheetJob | null {
     useReference: v.useReference === true,
     status: isSheetStatus(v.status) ? v.status : 'draft',
     panels,
+    ...(postUrl ? { postUrl } : {}),
     createdAt: asString(v.createdAt) ?? isoNow(),
     updatedAt: asString(v.updatedAt) ?? isoNow(),
   };

@@ -40,7 +40,7 @@ import {
   Select,
   Stack,
 } from '@civitai/blocks-react/ui';
-import type { BlockWorkflowSnapshot } from '@civitai/app-sdk/blocks';
+import type { BlockWorkflowSnapshot, WorkflowBody } from '@civitai/app-sdk/blocks';
 
 import {
   ACCOUNT_CHOICES,
@@ -55,6 +55,13 @@ import {
   type AccountChoice,
 } from '../money/generation.js';
 import { buildSheetPanelBody } from '../sheet/body.js';
+import {
+  buildEnhanceBody,
+  enhanceOutcomeFromSnapshot,
+  type EnhanceOutcome,
+} from '../sheet/enhance.js';
+import { composePanelPrompt } from '../sheet/prompt.js';
+import { startPollLoop } from '../money/pollLoop.js';
 import {
   idempotencyKeyFor,
   panelErrorCopy,
@@ -99,7 +106,7 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
   const { ready, viewer } = useBlockContext();
   const token = useBlockToken();
   const { balance } = useBuzzBalance();
-  const { estimate, submit } = useBuzzWorkflow();
+  const { estimate, submit, poll } = useBuzzWorkflow();
   const { requestSignIn } = useRequestSignIn();
   const { requestConsent } = useRequestConsent();
   const { refusal } = useConsentUnavailable();
@@ -129,6 +136,30 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
   const [submitProgress, setSubmitProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Prompt enhancement (AI rewrite per selected panel, priced before it runs).
+  const [enhancedBySpec, setEnhancedBySpec] = useState<Record<number, string>>({});
+  const [enhancePhase, setEnhancePhase] = useState<
+    'idle' | 'estimating' | 'confirming' | 'running'
+  >('idle');
+  const [enhanceQuote, setEnhanceQuote] = useState<{
+    total: number;
+    specIndexes: number[];
+  } | null>(null);
+  const [enhanceNotice, setEnhanceNotice] = useState<string | null>(null);
+  const [enhanceConsentWait, setEnhanceConsentWait] = useState(false);
+  const enhanceIntentRef = useRef(false);
+  const enhanceRunRef = useRef(0);
+  const pollCancelsRef = useRef<Array<() => void>>([]);
+  const pollRef = useRef(poll);
+  pollRef.current = poll;
+  useEffect(() => {
+    const cancels = pollCancelsRef.current;
+    return () => {
+      for (const c of cancels) c();
+      cancels.length = 0;
+    };
+  }, []);
 
   const consentIntentRef = useRef<'estimate' | 'submit' | null>(null);
   const runEstimateRef = useRef<() => void>(() => {});
@@ -233,9 +264,17 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
       account,
       useReference,
     });
+    const selectedIdx = allSpecs
+      .map((_, i) => i)
+      .filter((i) => specSelected[i]);
     job.panels = job.panels.map((p, i) => ({
       ...p,
       seed: resolvePanelSeed(seedVal, i, c.seedPolicy),
+      // AI-enhanced prompts (if the viewer enhanced before pricing) ride the
+      // panel into the sheet — the composer then uses them verbatim.
+      ...(enhancedBySpec[selectedIdx[i]]
+        ? { enhancedPrompt: enhancedBySpec[selectedIdx[i]] }
+        : {}),
     }));
 
     setDraft(job);
@@ -284,6 +323,7 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
     allSpecs,
     bodyOpts,
     characterId,
+    enhancedBySpec,
     estimate,
     library.characters,
     library.settings,
@@ -463,6 +503,220 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
     }
   }, [refusal, phase]);
 
+  // --- prompt enhancement ------------------------------------------------------
+  // An AI rewrite of each selected panel's composed prompt through the host's
+  // registered chat-completion step. Same money rules as generation: estimate
+  // every call, park ONE confirm with the summed price, submit only on
+  // confirm. The enhanced text is kept per spec index and lands on the sheet's
+  // panels at creation, where the composer uses it verbatim — so regenerates
+  // stay byte-identical to the original run.
+
+  const runEnhanceWorkflow = useCallback(
+    (body: WorkflowBody, key: string): Promise<EnhanceOutcome> =>
+      new Promise((resolve) => {
+        let settled = false;
+        const done = (o: EnhanceOutcome) => {
+          if (!settled) {
+            settled = true;
+            resolve(o);
+          }
+        };
+        void (async () => {
+          try {
+            const snap = await submit(body, { idempotencyKey: key });
+            if (isTerminalStatus(snap.status)) {
+              done(
+                snap.status === 'succeeded'
+                  ? enhanceOutcomeFromSnapshot(snap)
+                  : { type: 'none' },
+              );
+              return;
+            }
+            const cancelLoop = startPollLoop(pollRef.current, snap.workflowId, {
+              onSnapshot: (s2) => {
+                if (s2.status === 'succeeded') done(enhanceOutcomeFromSnapshot(s2));
+                else if (isTerminalStatus(s2.status)) done({ type: 'none' });
+              },
+              onUnreachable: () => done({ type: 'none' }),
+            });
+            pollCancelsRef.current.push(cancelLoop);
+          } catch {
+            done({ type: 'none' });
+          }
+        })();
+      }),
+    [submit],
+  );
+  const runEnhanceWorkflowRef = useRef(runEnhanceWorkflow);
+  runEnhanceWorkflowRef.current = runEnhanceWorkflow;
+
+  const estimateEnhance = useCallback(async () => {
+    const c = library.characters.find((x) => x.id === characterId);
+    const s = library.stacks.find((x) => x.id === stackId);
+    if (!c || !s) {
+      setEnhanceNotice('Pick a character and a stack first.');
+      setEnhancePhase('idle');
+      return;
+    }
+    const indexes = allSpecs.map((_, i) => i).filter((i) => specSelected[i]);
+    if (indexes.length === 0) {
+      setEnhanceNotice('Select at least one panel to enhance.');
+      setEnhancePhase('idle');
+      return;
+    }
+    setEnhancePhase('estimating');
+    setEnhanceNotice(null);
+    setEnhanceQuote(null);
+    let total = 0;
+    try {
+      for (const i of indexes) {
+        const composed = composePanelPrompt(
+          c,
+          s,
+          { ...allSpecs[i], id: 'enhance-tmp', seed: 0, status: 'queued', outputs: [], submitNonce: 0 },
+          library.settings,
+        ).prompt;
+        const snap = await estimate(buildEnhanceBody(composed, s.checkpoint.baseModel));
+        const cost = snap.cost?.total;
+        if (snap.status === 'failed' || snap.error || typeof cost !== 'number') {
+          setEnhanceNotice(
+            'Couldn’t price the enhancement — your original prompts are unchanged.',
+          );
+          setEnhancePhase('idle');
+          return;
+        }
+        total += cost;
+      }
+    } catch {
+      setEnhanceNotice(
+        'Couldn’t price the enhancement — your original prompts are unchanged.',
+      );
+      setEnhancePhase('idle');
+      return;
+    }
+    setEnhanceQuote({ total, specIndexes: indexes });
+    setEnhancePhase('confirming');
+  }, [allSpecs, characterId, estimate, library, specSelected, stackId]);
+  const estimateEnhanceRef = useRef(estimateEnhance);
+  estimateEnhanceRef.current = estimateEnhance;
+
+  const startEnhance = useCallback(() => {
+    setEnhanceNotice(null);
+    if (!characterId) {
+      setEnhanceNotice('Pick a character first.');
+      return;
+    }
+    if (!stackId) {
+      setEnhanceNotice('Pick a stack first.');
+      return;
+    }
+    if (selectedSpecs.length === 0) {
+      setEnhanceNotice('Select at least one panel to enhance.');
+      return;
+    }
+    if (anon) {
+      requestSignIn();
+      setEnhanceNotice("You're browsing as a guest — sign in to enhance prompts.");
+      return;
+    }
+    if (!granted) {
+      // Same consent as generation (the step spends Buzz) — resume into
+      // pricing when the grant lands.
+      enhanceIntentRef.current = true;
+      setEnhanceConsentWait(true);
+      requestConsent({ scopes: [BUDGETED_SCOPE] });
+      return;
+    }
+    void estimateEnhanceRef.current();
+  }, [
+    anon,
+    characterId,
+    granted,
+    requestConsent,
+    requestSignIn,
+    selectedSpecs.length,
+    stackId,
+  ]);
+
+  // Auto-resume enhancement pricing after a consent grant.
+  useEffect(() => {
+    if (granted && enhanceIntentRef.current) {
+      enhanceIntentRef.current = false;
+      setEnhanceConsentWait(false);
+      void estimateEnhanceRef.current();
+    }
+  }, [granted]);
+
+  useEffect(() => {
+    if (refusal && enhanceConsentWait) {
+      enhanceIntentRef.current = false;
+      setEnhanceConsentWait(false);
+      setEnhanceNotice(
+        'Spending approval isn’t available in this environment, so enhancement can’t run here.',
+      );
+    }
+  }, [refusal, enhanceConsentWait]);
+
+  const runEnhanceSubmit = useCallback(async () => {
+    const quote = enhanceQuote;
+    const c = library.characters.find((x) => x.id === characterId);
+    const s = library.stacks.find((x) => x.id === stackId);
+    if (!quote || !c || !s) {
+      setEnhancePhase('idle');
+      setEnhanceQuote(null);
+      return;
+    }
+    setEnhancePhase('running');
+    enhanceRunRef.current += 1;
+    const runId = enhanceRunRef.current;
+    const results: Record<number, string> = {};
+    let failures = 0;
+    let withheld: string | null = null;
+    for (const i of quote.specIndexes) {
+      const composed = composePanelPrompt(
+        c,
+        s,
+        { ...allSpecs[i], id: 'enhance-tmp', seed: 0, status: 'queued', outputs: [], submitNonce: 0 },
+        library.settings,
+      ).prompt;
+      const outcome = await runEnhanceWorkflowRef.current(
+        buildEnhanceBody(composed, s.checkpoint.baseModel),
+        idempotencyKeyFor('enhance', `${c.id}:${i}`, runId),
+      );
+      if (outcome.type === 'text') results[i] = outcome.text;
+      else {
+        failures += 1;
+        if (outcome.type === 'withheld') withheld = outcome.reason;
+      }
+    }
+    setEnhancedBySpec((cur) => ({ ...cur, ...results }));
+    setEnhanceQuote(null);
+    setEnhancePhase('idle');
+    // A prompt change invalidates any priced draft — the confirmed price must
+    // always match the submitted body byte-for-byte.
+    setDraft(null);
+    setEstimates({});
+    if (phase === 'confirm') setPhase('idle');
+    const got = Object.keys(results).length;
+    if (got > 0 && failures === 0) {
+      setEnhanceNotice(
+        `Enhanced ${got} prompt${got === 1 ? '' : 's'} — look for the Enhanced badges below, then price when you're ready.`,
+      );
+    } else if (got > 0) {
+      setEnhanceNotice(
+        `Enhanced ${got} of ${quote.specIndexes.length} prompts — the rest keep their original text.`,
+      );
+    } else if (withheld) {
+      setEnhanceNotice(
+        `The enhancement was withheld: ${withheld} Your original prompts are unchanged.`,
+      );
+    } else {
+      setEnhanceNotice(
+        'The enhancement didn’t come back — your original prompts are unchanged.',
+      );
+    }
+  }, [allSpecs, characterId, enhanceQuote, library, phase, stackId]);
+
   // --- render ------------------------------------------------------------------
 
   if (library.characters.length === 0) {
@@ -537,13 +791,28 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
               <Select
                 label="Character"
                 value={characterId}
-                onChange={setCharacterId}
+                onChange={(v) => {
+                  setCharacterId(v);
+                  // Enhanced prompts are composed from the old character —
+                  // they don't carry over to a different one.
+                  setEnhancedBySpec({});
+                  setEnhanceQuote(null);
+                  setEnhancePhase('idle');
+                  setEnhanceNotice(null);
+                }}
                 options={library.characters.map((c) => ({ value: c.id, label: c.name }))}
               />
               <Select
                 label="Stack"
                 value={stackId}
-                onChange={setStackId}
+                onChange={(v) => {
+                  setStackId(v);
+                  // The rewrite is tuned to the old checkpoint's family.
+                  setEnhancedBySpec({});
+                  setEnhanceQuote(null);
+                  setEnhancePhase('idle');
+                  setEnhanceNotice(null);
+                }}
                 options={library.stacks.map((s) => ({ value: s.id, label: s.name }))}
               />
               <NumberInput
@@ -590,6 +859,15 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
                     <Badge size="sm" variant="outline" style={{ textTransform: 'capitalize' }}>
                       {spec.kind}
                     </Badge>
+                    {enhancedBySpec[i] && (
+                      <span
+                        data-testid="se-enhance-applied"
+                        style={{ fontSize: 12, display: 'inline-flex', maxWidth: '45%', flexDirection: 'column' }}
+                      >
+                        <Badge size="sm" color="grape">Enhanced ✦</Badge>
+                        <span style={{ opacity: 0.6, marginTop: 2 }}>{enhancedBySpec[i]}</span>
+                      </span>
+                    )}
                   </label>
                 ))}
               </Stack>
@@ -605,6 +883,68 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
               Use reference portrait as img2img source
               {!character?.referenceImage && ' (no portrait on this character)'}
             </label>
+
+            <Stack gap="xs">
+              <Group justify="space-between" align="center">
+                <span style={{ fontSize: 13, opacity: 0.7 }}>
+                  AI can rewrite the selected prompts with richer visual detail
+                  before you price — priced first, like everything else.
+                </span>
+                <Button
+                  variant="light"
+                  color="grape"
+                  onClick={startEnhance}
+                  loading={enhancePhase === 'estimating' || enhancePhase === 'running'}
+                  disabled={busy || enhancePhase === 'confirming' || selectedSpecs.length === 0}
+                  data-testid="se-enhance"
+                >
+                  {enhancePhase === 'running'
+                    ? 'Enhancing…'
+                    : enhancePhase === 'estimating'
+                      ? 'Pricing…'
+                      : 'Enhance prompts ✦'}
+                </Button>
+              </Group>
+              {enhanceConsentWait && (
+                <Alert color="info" data-testid="se-enhance-consent">
+                  <Loader size="sm" /> Waiting for your approval in the Civitai dialog…
+                </Alert>
+              )}
+              {enhancePhase === 'confirming' && enhanceQuote && (
+                <Alert color="info" data-testid="se-enhance-confirm">
+                  <Stack gap="xs">
+                    <span>
+                      Enhance {enhanceQuote.specIndexes.length} prompt
+                      {enhanceQuote.specIndexes.length === 1 ? '' : 's'} · ≈
+                      {formatCost(enhanceQuote.total)} Buzz
+                    </span>
+                    <Group justify="flex-end">
+                      <Button
+                        variant="subtle"
+                        onClick={() => {
+                          setEnhanceQuote(null);
+                          setEnhancePhase('idle');
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        color="grape"
+                        onClick={() => void runEnhanceSubmit()}
+                        data-testid="se-enhance-confirm-run"
+                      >
+                        Enhance · {formatCost(enhanceQuote.total)} Buzz
+                      </Button>
+                    </Group>
+                  </Stack>
+                </Alert>
+              )}
+              {enhanceNotice && (
+                <Alert color="info" data-testid="se-enhance-notice">
+                  {enhanceNotice}
+                </Alert>
+              )}
+            </Stack>
 
             {phase === 'estimating' && (
               <Group gap="sm" align="center">

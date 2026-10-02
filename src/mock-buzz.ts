@@ -86,6 +86,14 @@ export interface MockMoneyHostOptions extends MockHostOptions {
   balanceError?: boolean;
   /** Rewrite a failed submit that named a pool into the domain-clamp rejection. */
   rejectAccount?: boolean;
+  /**
+   * Text replies for chat-completion step workflows, consumed FIFO: each
+   * outbound `SUBMIT_WORKFLOW` with `body.kind === 'step'` arms the next
+   * string, which is then attached as `textOutputs` on that workflow's
+   * succeeded snapshot. The stock mock has no step text replies; the real
+   * host attaches the moderation-scanned model output the same way.
+   */
+  stepTextOutputs?: string[];
 }
 
 /**
@@ -98,7 +106,9 @@ export interface MockMoneyHostOptions extends MockHostOptions {
  * native `buzzBalance` / `viewer` options straight through (no shim needed).
  */
 export function installMockMoneyHost(options: MockMoneyHostOptions = {}): () => void {
-  const { balanceError, rejectAccount, onOutbound, ...hostOptions } = options;
+  const { balanceError, rejectAccount, stepTextOutputs, onOutbound, ...hostOptions } = options;
+  const stepQueue = [...(stepTextOutputs ?? [])];
+  let armedStepText: string | undefined;
 
   // Tracks whether the block's last submit named a pool — gates the disallowed
   // rewrite so only a picked-pool failure becomes the domain-clamp rejection.
@@ -119,6 +129,26 @@ export function installMockMoneyHost(options: MockMoneyHostOptions = {}): () => 
     }
   };
   window.addEventListener('message', rewriteDisallowed);
+
+  // Inbound: attach the armed chat reply to a succeeded step workflow's
+  // snapshot as `textOutputs` — the same field the real host uses to release
+  // the scanned model output. Same before-the-transport ordering.
+  const injectStepText = (event: MessageEvent) => {
+    const data = event.data as
+      | {
+          type?: string;
+          payload?: { snapshot?: { status?: string; textOutputs?: string[] } };
+        }
+      | null
+      | undefined;
+    if (!data || (data.type !== 'WORKFLOW_STATUS' && data.type !== 'WORKFLOW_SUBMITTED')) return;
+    const snap = data.payload?.snapshot;
+    if (snap?.status === 'succeeded' && armedStepText !== undefined) {
+      snap.textOutputs = [armedStepText];
+      armedStepText = undefined;
+    }
+  };
+  window.addEventListener('message', injectStepText);
   // Re-create the transport AFTER the rewriter so the rewriter's listener is
   // earlier in registration order than the transport's.
   resetHarnessTransport();
@@ -131,6 +161,11 @@ export function installMockMoneyHost(options: MockMoneyHostOptions = {}): () => 
         const at = (msg.payload as { body?: { accountType?: unknown } } | undefined)?.body
           ?.accountType;
         pickedPool = isBuzzAccountType(at);
+        // Arm the next queued text reply for a chat-completion step submit.
+        const kind = (msg.payload as { body?: { kind?: unknown } } | undefined)?.body?.kind;
+        if (kind === 'step') {
+          armedStepText = stepQueue.shift();
+        }
       }
       // Balance-unavailable: reply SYNCHRONOUSLY (0.18 invokes onOutbound before
       // its own GET_BUZZ_BALANCE handler), so the error settles the read first and
@@ -155,5 +190,6 @@ export function installMockMoneyHost(options: MockMoneyHostOptions = {}): () => 
   return () => {
     uninstallHost();
     window.removeEventListener('message', rewriteDisallowed);
+    window.removeEventListener('message', injectStepText);
   };
 }

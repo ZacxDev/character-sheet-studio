@@ -51,6 +51,28 @@ const panel = (over: Partial<SheetPanel> = {}): SheetPanel => ({
 const settings: SheetSettings = { ...DEFAULT_SETTINGS };
 
 describe('composePanelPrompt', () => {
+  it('an AI-enhanced prompt wins verbatim; the negative stays the character’s', () => {
+    const { prompt, negativePrompt } = composePanelPrompt(
+      character(),
+      stack(),
+      panel({ enhancedPrompt: 'nyx_fox, a cyberpunk fox mercenary in chrome armor' }),
+      settings,
+    );
+    // No re-composition: no doubled identity clauses, no appended modifier.
+    expect(prompt).toBe('nyx_fox, a cyberpunk fox mercenary in chrome armor');
+    expect(negativePrompt).toBe('blurry, watermark');
+  });
+
+  it('a blank enhanced prompt falls back to normal composition', () => {
+    const { prompt } = composePanelPrompt(
+      character(),
+      stack(),
+      panel({ enhancedPrompt: '   ' }),
+      settings,
+    );
+    expect(prompt).toContain('character turnaround sheet, front view, full body');
+  });
+
   it('composes description + traits + trigger words + LoRA words + panel modifier in fixed order', () => {
     const { prompt } = composePanelPrompt(character(), stack(), panel(), settings);
     expect(prompt).toBe(

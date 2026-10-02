@@ -15,6 +15,7 @@ import {
   useBuzzPurchase,
   useBuzzWorkflow,
   useConsentUnavailable,
+  useCreatePostFromApp,
   usePublishGenerationOutputs,
   useRequestConsent,
   useRequestSignIn,
@@ -43,6 +44,10 @@ import {
 } from '../money/generation.js';
 import { startPollLoop } from '../money/pollLoop.js';
 import { buildSheetPanelBody } from '../sheet/body.js';
+import {
+  createPostErrorCopy,
+  type CreatePostErrorLike,
+} from '../sheet/posting.js';
 import {
   deriveSheetStatus,
   idempotencyKeyFor,
@@ -98,6 +103,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
   const { refusal } = useConsentUnavailable();
   const { saveImage } = useSaveImage();
   const { publish } = usePublishGenerationOutputs();
+  const { createPost } = useCreatePostFromApp();
 
   const anon = ready && !viewer;
   const granted = hasBudgetedScope(token?.scopes);
@@ -132,6 +138,10 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
     total: number;
   } | null>(null);
   const submitAllIntentRef = useRef(false);
+  // Post-to-profile: which target is mid-post (panel id or 'sheet'), plus the
+  // last post outcome message (Posted ✓ / error copy from posting.ts).
+  const [posting, setPosting] = useState<string | null>(null);
+  const [postNotice, setPostNotice] = useState<string | null>(null);
 
   const sheetRef = useRef(sheet);
   sheetRef.current = sheet;
@@ -588,6 +598,93 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
     [publish],
   );
 
+  // --- post to profile -----------------------------------------------------------
+  // Publishes a real, feed-visible Civitai post from this app's own workflow
+  // outputs (the host re-derives the images server-side; the per-call host
+  // confirm IS the consent). Error handling follows the SDK contract in
+  // posting.ts: declined → silent, timeout → "check your profile", never
+  // auto-retry.
+
+  const handlePostError = useCallback(
+    (err: unknown) => {
+      const copy = createPostErrorCopy((err ?? {}) as CreatePostErrorLike);
+      if (copy.action === 'sign-in') {
+        requestSignIn();
+        setPostNotice('Sign in to post to your profile.');
+      } else if (copy.action === 'notice') {
+        setPostNotice(copy.message);
+      }
+      // 'silent' — the viewer dismissed the host confirm themselves.
+    },
+    [requestSignIn],
+  );
+
+  const postPanel = useCallback(
+    async (panel: SheetPanel) => {
+      if (!panel.workflowId || !sheet) return;
+      setPostNotice(null);
+      setPosting(panel.id);
+      try {
+        const result = await createPost({
+          sources: [
+            { kind: 'workflow', workflowId: panel.workflowId, imageIndexes: [0] },
+          ],
+          title: panel.label,
+          detail: `From the sheet “${sheet.name}” — made with Character Sheet Studio.`,
+        });
+        await setPanel(panel.id, (p) => ({
+          ...p,
+          posted: true,
+          postUrl: result.url,
+        }));
+        setPostNotice('Posted to your profile ✓');
+      } catch (err) {
+        handlePostError(err);
+      } finally {
+        setPosting(null);
+      }
+    },
+    [createPost, handlePostError, setPanel, sheet],
+  );
+
+  const postSheet = useCallback(async () => {
+    if (!sheet) return;
+    // Only panels not already in a post — the server refuses (or duplicates)
+    // images that are already posted.
+    const targets = sheet.panels.flatMap((p) =>
+      p.status === 'done' && p.workflowId && !p.posted
+        ? [{ id: p.id, workflowId: p.workflowId }]
+        : [],
+    );
+    if (targets.length === 0) return;
+    setPostNotice(null);
+    setPosting('sheet');
+    try {
+      const result = await createPost({
+        sources: targets.map((t) => ({
+          kind: 'workflow' as const,
+          workflowId: t.workflowId,
+          imageIndexes: [0],
+        })),
+        title: sheet.name,
+        detail: `Character sheet — made with Character Sheet Studio.`,
+      });
+      const targetIds = new Set(targets.map((t) => t.id));
+      await updateSheet((s) => ({
+        ...s,
+        postUrl: result.url,
+        panels: s.panels.map((p) =>
+          targetIds.has(p.id) ? { ...p, posted: true, postUrl: result.url } : p,
+        ),
+      }));
+      setPostNotice('Posted to your profile ✓');
+    } catch (err) {
+      handlePostError(err);
+    } finally {
+      setPosting(null);
+    }
+  }, [createPost, handlePostError, sheet, updateSheet]);
+
   // --- rename / delete -------------------------------------------------------------
 
   const commitRename = useCallback(async () => {
@@ -701,6 +798,31 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
               {SHEET_STATUS_LABEL[sheet.status]}
             </Badge>
           </div>
+          <Group gap="sm" align="center">
+            <Button
+              size="sm"
+              variant="light"
+              loading={posting === 'sheet'}
+              disabled={
+                posting !== null ||
+                !sheet.panels.some(
+                  (p) => p.status === 'done' && p.workflowId && !p.posted,
+                )
+              }
+              onClick={() => void postSheet()}
+              data-testid="se-post-sheet"
+            >
+              {sheet.postUrl &&
+              sheet.panels.every((p) => p.status !== 'done' || p.posted)
+                ? 'Posted ✓'
+                : sheet.postUrl
+                  ? 'Post new panels to profile'
+                  : 'Post sheet to profile'}
+            </Button>
+            {sheet.postUrl && (
+              <span style={{ fontSize: 13, opacity: 0.7 }}>{sheet.postUrl}</span>
+            )}
+          </Group>
         </Stack>
       </Card>
 
@@ -712,6 +834,11 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
       )}
 
       {error && <Alert color="error">{error}</Alert>}
+      {postNotice && (
+        <Alert color="info" data-testid="se-post-notice">
+          {postNotice}
+        </Alert>
+      )}
       {consentWait && (
         <Alert color="info">
           <Loader size="sm" /> Waiting for your approval in the Civitai dialog…
@@ -874,6 +1001,16 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
                         onClick={() => void publishPanel(panel)}
                       >
                         {panel.published ? 'Published ✓' : 'Publish'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="subtle"
+                        loading={posting === panel.id}
+                        disabled={!panel.workflowId || panel.posted || posting !== null}
+                        onClick={() => void postPanel(panel)}
+                        data-testid="se-panel-post"
+                      >
+                        {panel.posted ? 'Posted ✓' : 'Post'}
                       </Button>
                       <Button
                         size="sm"

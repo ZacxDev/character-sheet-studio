@@ -53,6 +53,16 @@ export function composePanelPrompt(
   // sites don't churn when it does.
   _settings: SheetSettings,
 ): ComposedPrompt {
+  const negativePrompt = cleanFragment(character.negativePrompt) ?? '';
+
+  // AI-enhanced panels generate from the enhanced text VERBATIM: the rewrite
+  // started from the fully-composed prompt (identity clauses + trigger words
+  // included) and was instructed to preserve them, so re-composing here would
+  // double every clause. The enhanced text is stored on the panel, keeping
+  // the determinism contract — same stored panel, same prompt, forever.
+  const enhanced = cleanFragment(panel.enhancedPrompt);
+  if (enhanced) return { prompt: enhanced, negativePrompt };
+
   const clauses: string[] = [];
 
   const description = cleanFragment(character.description);
@@ -75,6 +85,6 @@ export function composePanelPrompt(
 
   return {
     prompt: clauses.join(', '),
-    negativePrompt: cleanFragment(character.negativePrompt) ?? '',
+    negativePrompt,
   };
 }
