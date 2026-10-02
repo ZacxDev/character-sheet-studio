@@ -37,6 +37,7 @@ import {
   classifyPricedFailure,
   classifySubmitRejection,
   estimateErrorCopy,
+  formatCost,
   hasBudgetedScope,
   isTerminalStatus,
 } from '../money/generation.js';
@@ -110,7 +111,18 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [consentWait, setConsentWait] = useState(false);
   const [exporting, setExporting] = useState<string | null>(null);
+  const [exportFlash, setExportFlash] = useState<string | null>(null);
   const [publishing, setPublishing] = useState<string | null>(null);
+  // A priced-but-not-yet-submitted panel action: the viewer sees the exact
+  // cost and confirms before any Buzz moves (the batch flow's rule, applied
+  // to single panels). `next` is the prepared panel state (new seed for
+  // regenerate) so estimate and submit run the identical body.
+  const [panelConfirm, setPanelConfirm] = useState<{
+    panelId: string;
+    mode: 'retry' | 'regenerate';
+    cost: number;
+    next: SheetPanel;
+  } | null>(null);
 
   const sheetRef = useRef(sheet);
   sheetRef.current = sheet;
@@ -212,8 +224,13 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
     [requestConsent],
   );
 
-  /** Submit one panel (retry or regenerate). estimate → submit → poll. */
-  const runPanelSubmit = useCallback(
+  /**
+   * Price one panel action (retry or regenerate). Estimate is free; the
+   * result NEVER submits — it parks a confirm the viewer must accept, so no
+   * per-panel spend is ever blind. On estimate failure the panel fails with
+   * the priced-refusal code, exactly like the batch flow.
+   */
+  const pricePanel = useCallback(
     async (panelId: string, mode: 'retry' | 'regenerate') => {
       const cur = sheetRef.current;
       const character = library.characters.find((c) => c.id === cur?.characterId);
@@ -240,32 +257,56 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
 
       setBusyPanel(panelId);
       setError(null);
+      setPanelConfirm(null);
       try {
-        // Estimate is free and keeps the price honest for the new attempt.
-        try {
-          const est: BlockWorkflowSnapshot = await estimate(body);
-          const cost = est.cost?.total;
-          if (est.status === 'failed' || est.error || typeof cost !== 'number') {
-            await failPanel(
-              panelId,
-              pricedKindToErrorCode(classifyPricedFailure(est.error)),
-            );
-            return;
-          }
-        } catch (err) {
-          const code = (err as { code?: unknown } | null)?.code;
-          await setPanel(panelId, (p) => ({
-            ...p,
-            status: 'failed',
-            errorCode: 'estimate-failed',
-          }));
-          setError(`Couldn’t price this panel. ${estimateErrorCopy(code)}`);
+        const est: BlockWorkflowSnapshot = await estimate(body);
+        const cost = est.cost?.total;
+        if (est.status === 'failed' || est.error || typeof cost !== 'number') {
+          await failPanel(
+            panelId,
+            pricedKindToErrorCode(classifyPricedFailure(est.error)),
+          );
           return;
         }
+        setPanelConfirm({ panelId, mode, cost, next });
+      } catch (err) {
+        const code = (err as { code?: unknown } | null)?.code;
+        await setPanel(panelId, (p) => ({
+          ...p,
+          status: 'failed',
+          errorCode: 'estimate-failed',
+        }));
+        setError(`Couldn’t price this panel. ${estimateErrorCopy(code)}`);
+      } finally {
+        setBusyPanel(null);
+      }
+    },
+    [estimate, failPanel, library, setPanel],
+  );
+  const pricePanelRef = useRef(pricePanel);
+  pricePanelRef.current = pricePanel;
 
+  /** Submit the prepared panel state (the exact body the viewer priced). */
+  const runPanelSubmit = useCallback(
+    async (panelId: string, next: SheetPanel) => {
+      const cur = sheetRef.current;
+      const character = library.characters.find((c) => c.id === cur?.characterId);
+      const stack = library.stacks.find((s) => s.id === cur?.stackId);
+      if (!cur || !character || !stack) {
+        setError('The sheet is gone — go back and reopen it.');
+        return;
+      }
+      const body = buildSheetPanelBody(next, character, stack, library.settings, {
+        account: cur.account,
+        useReference: cur.useReference,
+      });
+
+      setBusyPanel(panelId);
+      setError(null);
+      try {
         try {
           const snap: BlockWorkflowSnapshot = await submit(body, {
-            idempotencyKey: idempotencyKeyFor(cur.id, panel.id, next.submitNonce),
+            idempotencyKey: idempotencyKeyFor(cur.id, panelId, next.submitNonce),
           });
           if (isTerminalStatus(snap.status)) {
             if (snap.status === 'succeeded') {
@@ -324,10 +365,17 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
         setBusyPanel(null);
       }
     },
-    [estimate, failPanel, library, poll, setPanel, submit],
+    [failPanel, library, setPanel, submit],
   );
   const runPanelSubmitRef = useRef(runPanelSubmit);
   runPanelSubmitRef.current = runPanelSubmit;
+
+  const confirmPanelSubmit = useCallback(() => {
+    const c = panelConfirm;
+    if (!c) return;
+    setPanelConfirm(null);
+    void runPanelSubmitRef.current(c.panelId, c.next);
+  }, [panelConfirm]);
   const pollCancelsRef = useRef<Array<() => void>>([]);
   useEffect(() => {
     const cancels = pollCancelsRef.current;
@@ -347,7 +395,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
         requestConsentFor(panelId, mode);
         return;
       }
-      void runPanelSubmitRef.current(panelId, mode);
+      void pricePanelRef.current(panelId, mode);
     },
     [anon, granted, requestConsentFor, requestSignIn],
   );
@@ -358,7 +406,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
     if (granted && intent) {
       consentIntentRef.current = null;
       setConsentWait(false);
-      void runPanelSubmitRef.current(intent.panelId, intent.mode);
+      void pricePanelRef.current(intent.panelId, intent.mode);
     }
   }, [granted]);
 
@@ -409,6 +457,12 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
       setExporting(panel.id);
       try {
         await saveImage({ url, filename: `${panel.label.replace(/\s+/g, '-').toLowerCase()}.png` });
+        // Visible confirmation — a silent export reads as a failed one.
+        setExportFlash(panel.id);
+        window.setTimeout(
+          () => setExportFlash((cur) => (cur === panel.id ? null : cur)),
+          2000,
+        );
       } catch {
         setError('Export failed — the host refused the download. Try again.');
       } finally {
@@ -424,6 +478,8 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
       setPublishing(panel.id);
       try {
         await publish({ workflowId: panel.workflowId, imageIndexes: [0], title: panel.label });
+        // Persistent marker (survives reload) so Publish never looks unclicked.
+        await setPanel(panel.id, (p) => ({ ...p, published: true }));
       } catch {
         setError('Publish failed — the host refused (or you dismissed the confirm).');
       } finally {
@@ -567,6 +623,8 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
           const errCopy = panel.errorCode
             ? panelErrorCopy(panel.errorCode as PanelErrorCode)
             : null;
+          const confirming =
+            panelConfirm?.panelId === panel.id && panel.status !== 'running';
           return (
             <Card key={panel.id} padding="sm">
               <Stack gap="sm">
@@ -618,6 +676,17 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
                   </Button>
                 )}
 
+                {confirming ? (
+                  <Group gap="xs" align="center" wrap>
+                    <Badge variant="light">{formatCost(panelConfirm?.cost ?? 0)} Buzz</Badge>
+                    <Button size="sm" onClick={confirmPanelSubmit} data-testid="se-panel-confirm-submit">
+                      Submit
+                    </Button>
+                    <Button size="sm" variant="subtle" onClick={() => setPanelConfirm(null)}>
+                      Cancel
+                    </Button>
+                  </Group>
+                ) : (
                 <Group gap="xs" wrap>
                   {panel.status === 'done' && (
                     <>
@@ -625,18 +694,19 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
                         size="sm"
                         variant="subtle"
                         loading={exporting === panel.id}
+                        disabled={exportFlash === panel.id}
                         onClick={() => void exportPanel(panel)}
                       >
-                        Export
+                        {exportFlash === panel.id ? 'Exported ✓' : 'Export'}
                       </Button>
                       <Button
                         size="sm"
                         variant="subtle"
                         loading={publishing === panel.id}
-                        disabled={!panel.workflowId}
+                        disabled={!panel.workflowId || panel.published}
                         onClick={() => void publishPanel(panel)}
                       >
-                        Publish
+                        {panel.published ? 'Published ✓' : 'Publish'}
                       </Button>
                       <Button
                         size="sm"
@@ -688,6 +758,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
                     </Button>
                   )}
                 </Group>
+                )}
               </Stack>
             </Card>
           );

@@ -262,3 +262,108 @@ describe('Sheet View top-up affordance', () => {
     expect(screen.queryByTestId('se-panel-top-up')).not.toBeInTheDocument();
   });
 });
+
+describe('Sheet View priced submits + action feedback', () => {
+  let uninstall: (() => void) | undefined;
+  afterEach(() => {
+    uninstall?.();
+    uninstall = undefined;
+  });
+
+  const jobWith = (panel: SheetJob['panels'][number], status: SheetJob['status']): SheetJob => ({
+    id: 'sheet-1',
+    name: 'Kaida sheet',
+    characterId: 'char-1',
+    stackId: 'stack-1',
+    seed: 42,
+    account: 'auto',
+    useReference: false,
+    status,
+    panels: [panel],
+    createdAt: '2026-10-01T22:00:00.000Z',
+    updatedAt: '2026-10-01T22:00:00.000Z',
+  });
+
+  it('queued panel: the price is shown and confirmed BEFORE any submit', async () => {
+    const outbound: { type?: string; payload?: unknown }[] = [];
+    uninstall = installMockMoneyHost({
+      consentGranted: true, // isolate pricing: no consent detour
+      onOutbound: (msg) => {
+        outbound.push(msg);
+      },
+    });
+    const user = userEvent.setup();
+    render(
+      <SheetView
+        library={stubLibrary({
+          sheets: [
+            jobWith(
+              {
+                id: 'p1',
+                kind: 'front',
+                label: 'Front view',
+                promptModifier: 'front view',
+                seed: 42,
+                status: 'queued',
+                outputs: [],
+                submitNonce: 0,
+              },
+              'draft',
+            ),
+          ],
+        })}
+        sheetId="sheet-1"
+        onBack={() => {}}
+      />,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'Submit' }));
+
+    // Estimate ran, price is on screen, and NOTHING was submitted yet.
+    const confirmBtn = await screen.findByTestId('se-panel-confirm-submit');
+    expect(screen.getByText('8 Buzz')).toBeInTheDocument();
+    expect(outbound.some((m) => m.type === 'ESTIMATE_WORKFLOW')).toBe(true);
+    expect(outbound.some((m) => m.type === 'SUBMIT_WORKFLOW')).toBe(false);
+
+    await user.click(confirmBtn);
+    await waitFor(() =>
+      expect(outbound.some((m) => m.type === 'SUBMIT_WORKFLOW')).toBe(true),
+    );
+  });
+
+  it('done panel: Export flashes a confirmation and Publish sticks', async () => {
+    uninstall = installMockMoneyHost({});
+    const user = userEvent.setup();
+    render(
+      <SheetView
+        library={stubLibrary({
+          sheets: [
+            jobWith(
+              {
+                id: 'p1',
+                kind: 'front',
+                label: 'Front view',
+                promptModifier: 'front view',
+                seed: 42,
+                status: 'done',
+                outputs: ['https://example.com/front.png'],
+                submitNonce: 1,
+                workflowId: 'wf-1',
+              },
+              'complete',
+            ),
+          ],
+        })}
+        sheetId="sheet-1"
+        onBack={() => {}}
+      />,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'Export' }));
+    await screen.findByRole('button', { name: 'Exported ✓' });
+
+    await user.click(screen.getByRole('button', { name: 'Publish' }));
+    const published = await screen.findByRole('button', { name: 'Published ✓' });
+    expect(published).toBeDisabled();
+  });
+});

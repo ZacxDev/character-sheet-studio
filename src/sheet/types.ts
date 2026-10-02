@@ -396,6 +396,8 @@ export interface SheetPanel extends PanelSpec {
   outputs: string[];
   /** App-owned failure code, never raw server prose. */
   errorCode?: string;
+  /** Set after a successful Publish — the panel shows a persistent marker. */
+  published?: boolean;
   /**
    * Incremented on every (re)submit. The idempotency key is a bounded hash of
    * sheetId + panelId + submitNonce (the host rejects anything outside
@@ -426,6 +428,7 @@ function normalizeSheetPanel(v: unknown): SheetPanel | null {
     status,
     outputs: asStringArray(v.outputs),
     ...(errorCode ? { errorCode } : {}),
+    ...(v.published === true ? { published: true } : {}),
     submitNonce: asInt(v.submitNonce) ?? 0,
   };
 }
