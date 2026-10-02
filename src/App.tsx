@@ -7,7 +7,7 @@
 
 import { useRef, useState } from 'react';
 
-import { useBlockContext, useBlockResize } from '@civitai/blocks-react';
+import { useBlockContext, useBlockResize, useRequestSignIn } from '@civitai/blocks-react';
 import {
   Alert,
   Badge,
@@ -40,6 +40,7 @@ const TABS: Array<{ value: Tab; label: string }> = [
 
 export function App() {
   const { ready, viewer, theme } = useBlockContext();
+  const { requestSignIn } = useRequestSignIn();
   const library = useSheetLibrary();
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -71,20 +72,28 @@ export function App() {
   return (
     <div
       ref={rootRef}
+      className="css-root"
       data-theme={theme}
       style={{ maxWidth: 960, margin: '0 auto', padding: 16 }}
     >
       <Stack gap="md">
         <Group justify="space-between" align="center">
           <h1 style={{ margin: 0, fontSize: 22 }}>Character Sheet Studio</h1>
-          <SegmentedControl
-            value={tab}
-            onChange={(v) => {
-              setTab(v as Tab);
-              if (v !== 'sheets') setOpenSheetId(null);
-            }}
-            data={TABS}
-          />
+          <Group gap="sm" align="center">
+            {anon && (
+              <Button size="sm" variant="light" onClick={() => requestSignIn()} data-testid="se-sign-in">
+                Sign in
+              </Button>
+            )}
+            <SegmentedControl
+              value={tab}
+              onChange={(v) => {
+                setTab(v as Tab);
+                if (v !== 'sheets') setOpenSheetId(null);
+              }}
+              data={TABS}
+            />
+          </Group>
         </Group>
 
         {anon && (

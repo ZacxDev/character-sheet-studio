@@ -32,6 +32,9 @@ describe('App shell smoke test', () => {
     await waitFor(() =>
       expect(screen.getByText('Character Sheet Studio')).toBeInTheDocument(),
     );
+
+    // The custom "Ink & Violet" theme scope rides on the app root.
+    expect(document.querySelector('.css-root')).not.toBeNull();
     for (const tab of ['Characters', 'Stacks', 'Sheet Builder', 'Sheets']) {
       expect(screen.getByRole('tab', { name: tab })).toBeInTheDocument();
     }

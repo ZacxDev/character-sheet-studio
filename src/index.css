@@ -34,3 +34,78 @@ button:focus-visible {
   outline: 2px solid var(--civitai-color-primary);
   outline-offset: 2px;
 }
+
+/* ---------------------------------------------------------------------------
+   Character Sheet Studio theme — "Ink & Violet".
+
+   The components read --civitai-* tokens, so a custom theme is a token
+   REDEFINITION scoped to the app root (.css-root), not new component CSS.
+   Dark is the BASE (the base rule below has no data-theme qualifier, so a
+   pre-init frame paints dark, matching the boot skeleton); light exists only
+   as the explicit [data-theme='light'] override the host can request.
+   The [data-theme] forms out-rank the pack's own [data-theme] blocks
+   (0,2,0 vs 0,1,0) so the theme wins regardless of stylesheet order.
+   ------------------------------------------------------------------------- */
+.css-root,
+.css-root[data-theme='dark'] {
+  --civitai-color-body: #100e14;
+  --civitai-color-surface: #181420;
+  --civitai-color-surface-2: #211a2d;
+  --civitai-color-border: #3a3052;
+  --civitai-color-text: #ede9f5;
+  --civitai-color-text-dimmed: #a298bc;
+  --civitai-color-primary: #8b5cf6;
+  --civitai-color-primary-hover: #7c4def;
+  --civitai-color-primary-fg: #ffffff;
+  --civitai-color-primary-light: rgba(139, 92, 246, 0.16);
+  --civitai-color-info: #a78bfa;
+  --civitai-color-success: #2fb389;
+  --civitai-color-warning: #f59e0b;
+  --civitai-color-error: #fb7185;
+  --civitai-color-gray-0: #f7f5fb;
+  --civitai-color-gray-1: #efeaf7;
+  --civitai-color-gray-2: #e3dcf0;
+  --civitai-color-gray-3: #d3c9e6;
+  --civitai-color-gray-4: #bdb1d9;
+  --civitai-color-gray-5: #a79bc4;
+  --civitai-color-gray-6: #8e81ac;
+  --civitai-color-gray-7: #6f6390;
+  --civitai-color-gray-8: #4a4266;
+  --civitai-color-gray-9: #241e33;
+  --civitai-color-segmented-bg: #262036;
+  --civitai-color-track: #262036;
+  --civitai-color-media-placeholder: #221b31;
+  --civitai-radius: 0.55rem;
+  --civitai-font: 'Avenir Next', 'Segoe UI', system-ui, -apple-system, Roboto,
+    Helvetica, Arial, sans-serif;
+}
+
+.css-root[data-theme='light'] {
+  --civitai-color-body: #faf8fd;
+  --civitai-color-surface: #ffffff;
+  --civitai-color-surface-2: #f2edfa;
+  --civitai-color-border: #e2d8f3;
+  --civitai-color-text: #251e38;
+  --civitai-color-text-dimmed: #726a8c;
+  --civitai-color-primary: #7c3aed;
+  --civitai-color-primary-hover: #6d28d9;
+  --civitai-color-primary-fg: #ffffff;
+  --civitai-color-primary-light: rgba(124, 58, 237, 0.1);
+  --civitai-color-info: #7c3aed;
+  --civitai-color-success: #0e9f6e;
+  --civitai-color-warning: #d97706;
+  --civitai-color-error: #e11d48;
+  --civitai-color-segmented-bg: #efe9fa;
+  --civitai-color-track: #efe9fa;
+  --civitai-color-media-placeholder: #ede8f7;
+}
+
+/* Display type: an artist's-book serif for the app title + screen headings.
+   Body text stays the pack's sans. All system fonts — nothing to fetch. */
+.css-root h1,
+.css-root h2,
+.css-root h3 {
+  font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia,
+    'Times New Roman', serif;
+  letter-spacing: -0.01em;
+}

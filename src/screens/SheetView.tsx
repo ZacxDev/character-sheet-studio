@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   useBlockContext,
   useBlockToken,
+  useBuzzPurchase,
   useBuzzWorkflow,
   useConsentUnavailable,
   usePublishGenerationOutputs,
@@ -89,6 +90,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
   const { ready, viewer } = useBlockContext();
   const token = useBlockToken();
   const { estimate, submit, poll, cancel } = useBuzzWorkflow();
+  const { openPurchaseModal } = useBuzzPurchase();
   const { requestSignIn } = useRequestSignIn();
   const { requestConsent } = useRequestConsent();
   const { refusal } = useConsentUnavailable();
@@ -602,6 +604,18 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
                   <Alert color="error" title={errCopy.title}>
                     <span style={{ fontSize: 13 }}>{errCopy.body}</span>
                   </Alert>
+                )}
+
+                {errCopy?.showTopUp && (
+                  <Button
+                    size="sm"
+                    variant="light"
+                    disabled={busy}
+                    onClick={() => void openPurchaseModal()}
+                    data-testid="se-panel-top-up"
+                  >
+                    Top up Buzz
+                  </Button>
                 )}
 
                 <Group gap="xs" wrap>

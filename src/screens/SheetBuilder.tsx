@@ -126,6 +126,7 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
   const [estimates, setEstimates] = useState<Record<string, PanelEstimate>>({});
   const [submitProgress, setSubmitProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const consentIntentRef = useRef<'estimate' | 'submit' | null>(null);
   const runEstimateRef = useRef<() => void>(() => {});
@@ -196,17 +197,24 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
     setError(null);
     const c = library.characters.find((x) => x.id === characterId);
     const s = library.stacks.find((x) => x.id === stackId);
+    // Every early return MUST reset the phase — on the consent-resume path we
+    // arrive here with phase 'needs-consent', and leaving it set soft-locks
+    // the screen (every control disabled, "Waiting for your approval…" never
+    // clears).
     if (!c) {
       setError('Pick a character first.');
+      setPhase('idle');
       return;
     }
     if (!s) {
       setError('Pick a stack first — create one on the Stacks screen.');
+      setPhase('idle');
       return;
     }
     const specs = allSpecs.filter((_, i) => specSelected[i]);
     if (specs.length === 0) {
       setError('Select at least one panel.');
+      setPhase('idle');
       return;
     }
     const seedVal = seed ?? randomSeed();
@@ -381,8 +389,27 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
   );
 
   const startPricing = useCallback(() => {
+    setError(null);
+    setNotice(null);
+    // Validate BEFORE consent: asking for spend approval and only then
+    // complaining about the setup burns a round-trip and (on the consent-
+    // resume path) used to strand the viewer in a disabled spinner.
+    if (!characterId) {
+      setError('Pick a character first.');
+      return;
+    }
+    if (!stackId) {
+      setError('Pick a stack first — create one on the Stacks screen.');
+      return;
+    }
+    if (selectedSpecs.length === 0) {
+      setError('Select at least one panel.');
+      return;
+    }
     if (anon) {
       requestSignIn();
+      // Never a silent no-op: say what happened and what to do instead.
+      setNotice("You're browsing as a guest — sign in to price and generate.");
       return;
     }
     if (!granted) {
@@ -392,7 +419,15 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
       return;
     }
     void runEstimateRef.current();
-  }, [anon, granted, requestConsentFor, requestSignIn]);
+  }, [
+    anon,
+    characterId,
+    granted,
+    requestConsentFor,
+    requestSignIn,
+    selectedSpecs.length,
+    stackId,
+  ]);
 
   const startConfirmedSubmit = useCallback(() => {
     if (anon) {
@@ -471,6 +506,7 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
       <h2 style={{ margin: 0, fontSize: 20 }}>Sheet Builder</h2>
 
       {error && <Alert color="error">{error}</Alert>}
+      {notice && <Alert color="info">{notice}</Alert>}
 
       {phase === 'needs-consent' && (
         <Alert color="info">
@@ -579,8 +615,15 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
               <span style={{ fontSize: 13, opacity: 0.7 }}>
                 {balanceText ?? ' '}
               </span>
-              <Button onClick={startPricing} loading={phase === 'estimating'} disabled={busy && phase !== 'estimating'}>
-                Price {selectedSpecs.length} panel{selectedSpecs.length === 1 ? '' : 's'}
+              <Button
+                onClick={startPricing}
+                loading={phase === 'estimating'}
+                disabled={busy || selectedSpecs.length === 0}
+                data-testid="se-builder-price"
+              >
+                {selectedSpecs.length === 0
+                  ? 'Select a panel to price'
+                  : `Price ${selectedSpecs.length} panel${selectedSpecs.length === 1 ? '' : 's'}`}
               </Button>
             </Group>
           </Stack>
