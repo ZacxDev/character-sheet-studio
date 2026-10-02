@@ -1,0 +1,34 @@
+{
+  "$schema": "https://civitai.com/schemas/app-block/v1.json",
+  "blockId": "character-sheet-studio",
+  "version": "0.1.3",
+  "name": "Character Sheet Studio",
+  "type": "block",
+  "scopes": [
+    "ai:write:budgeted",
+    "apps:storage:read",
+    "apps:storage:write"
+  ],
+  "scopeJustifications": {
+    "ai:write:budgeted": "Runs image generations on the user's behalf, spending from the per-generation Buzz budget the page grants.",
+    "apps:storage:read": "Loads the viewer's saved characters, model stacks, and sheets from the app's per-viewer datastore.",
+    "apps:storage:write": "Persists the viewer's characters, model stacks, and sheets to the app's per-viewer datastore."
+  },
+  "page": {
+    "path": "/",
+    "title": "Character Sheet Studio",
+    "icon": "bolt",
+    "buzzBudgetPerGen": 300
+  },
+  "iframe": {
+    "minHeight": 600,
+    "maxHeight": 4000,
+    "resizable": true,
+    "sandbox": "allow-scripts allow-forms"
+  },
+  "contentRating": "g",
+  "bootSkeleton": true,
+  "minApiVersion": "1.0",
+  "buildCommand": "npm run build",
+  "outputDir": "dist"
+}
