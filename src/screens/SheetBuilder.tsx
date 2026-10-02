@@ -71,6 +71,8 @@ export interface SheetBuilderProps {
   library: SheetLibrary;
   preselectedCharacterId: string | null;
   onOpenSheet: (sheetId: string) => void;
+  /** Take the viewer to the Stacks tab so they can create a stack. */
+  onCreateStack: () => void;
 }
 
 type BuilderPhase =
@@ -91,7 +93,7 @@ function randomSeed(): number {
   return 100000 + Math.floor(Math.random() * 900000);
 }
 
-export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet }: SheetBuilderProps) {
+export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onCreateStack }: SheetBuilderProps) {
   const { ready, viewer } = useBlockContext();
   const token = useBlockToken();
   const { balance } = useBuzzBalance();
@@ -438,10 +440,17 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet }: S
   if (library.stacks.length === 0) {
     return (
       <Card>
-        <p style={{ margin: 0, opacity: 0.75 }}>
-          Create a stack first (checkpoint + LoRAs) — then come back to build a
-          sheet with it.
-        </p>
+        <Stack gap="sm">
+          <p style={{ margin: 0, opacity: 0.75 }}>
+            Sheets generate with a stack — a checkpoint plus LoRAs. You don’t
+            have one yet, so let’s fix that first.
+          </p>
+          <div>
+            <Button onClick={onCreateStack} data-testid="builder-create-stack">
+              Create a stack
+            </Button>
+          </div>
+        </Stack>
       </Card>
     );
   }

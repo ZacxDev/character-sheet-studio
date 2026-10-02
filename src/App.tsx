@@ -103,6 +103,7 @@ export function App() {
             library={library}
             preselectedCharacterId={preselectedCharacterId ?? null}
             onOpenSheet={openSheet}
+            onCreateStack={() => setTab('stacks')}
           />
         )}
         {tab === 'sheets' &&

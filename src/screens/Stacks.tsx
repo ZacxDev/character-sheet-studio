@@ -13,7 +13,6 @@
 import { useEffect, useRef, useState } from 'react';
 
 import {
-  useCheckpointPicker,
   useGenerationResources,
   useResourcePicker,
 } from '@civitai/blocks-react';
@@ -199,7 +198,6 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
   const [error, setError] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
 
-  const { open: openCheckpointPicker } = useCheckpointPicker();
   const { open: openResourcePicker } = useResourcePicker();
   const { fetch: fetchResources } = useGenerationResources();
   const mountedRef = useRef(true);
@@ -260,10 +258,10 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
   const onChangeCheckpoint = async () => {
     setPickerBusy(true);
     try {
-      const { selected } = await openCheckpointPicker({
-        baseModelGroup: checkpoint.baseModel,
-        currentVersionId: checkpoint.modelVersionId,
-      });
+      // Unconstrained pick — no baseModelGroup, so the picker shows ALL
+      // checkpoints. (The checkpoint-only hook REQUIRES an ecosystem hint;
+      // the generic resource hook blesses omitting it.)
+      const selected = await openResourcePicker({ resourceType: 'Checkpoint' });
       if (selected) setCheckpoint(checkpointFromPick(selected));
     } finally {
       setPickerBusy(false);
@@ -353,7 +351,7 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
             <span style={{ fontSize: 14 }}>
               {checkpoint.name ?? `Model #${checkpoint.modelVersionId}`} ({checkpoint.baseModel})
             </span>
-            <Button size="sm" variant="light" loading={pickerBusy} onClick={() => void onChangeCheckpoint()}>
+            <Button size="sm" variant="light" loading={pickerBusy} onClick={() => void onChangeCheckpoint()} data-testid="stack-checkpoint-change">
               Change
             </Button>
           </Group>
