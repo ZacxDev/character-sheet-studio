@@ -27,6 +27,34 @@ export interface CreatePostErrorLike {
   message?: string;
 }
 
+/**
+ * The consent-gated scope behind posting. It must be declared in the
+ * manifest (with a justification) AND granted by the viewer before the host
+ * will resolve a createPost — so Post checks for it first and routes a
+ * missing grant to the consent prompt instead of an error wall.
+ */
+export const POSTS_SCOPE = 'posts:write:self';
+
+/** Whether the current block token already carries the posts scope. */
+export function hasPostsScope(
+  scopes: readonly string[] | undefined | null,
+): boolean {
+  return Array.isArray(scopes) && scopes.includes(POSTS_SCOPE);
+}
+
+const SCOPE_ERROR_RE = /scope|permission|consent|not granted|forbidden|\b403\b/i;
+
+/**
+ * Whether a createPost failure smells like a missing posts:write:self grant
+ * ('no block token', or a permission-flavored server message). These get ONE
+ * consent round-trip + retry, not an error wall; anything else follows the
+ * normal copy mapping.
+ */
+export function isScopeShapedPostError(err: CreatePostErrorLike): boolean {
+  if (err.code === 'no block token') return true;
+  return typeof err.message === 'string' && SCOPE_ERROR_RE.test(err.message);
+}
+
 export type PostOutcomeCopy =
   | { action: 'silent' }
   | { action: 'sign-in' }

@@ -79,21 +79,17 @@ export function App() {
   };
 
   return (
-    <div
-      ref={rootRef}
-      className="css-root"
-      data-theme={theme}
-      style={{ maxWidth: 960, margin: '0 auto', padding: 16 }}
-    >
+    <div ref={rootRef} className="css-root css-shell" data-theme={theme}>
       <Stack gap="md">
-        <Group justify="space-between" align="center">
+        <Group justify="space-between" align="center" wrap>
           <h1 style={{ margin: 0, fontSize: 22 }}>Character Sheet Studio</h1>
-          <Group gap="sm" align="center">
+          <Group gap="sm" align="center" wrap style={{ minWidth: 0 }}>
             {anon && (
               <Button size="sm" variant="light" onClick={() => requestSignIn()} data-testid="se-sign-in">
                 Sign in
               </Button>
             )}
+            <div className="css-tabs-scroll">
             <SegmentedControl
               value={tab}
               onChange={(v) => {
@@ -119,6 +115,7 @@ export function App() {
               }}
               data={TABS}
             />
+            </div>
           </Group>
         </Group>
 
@@ -230,13 +227,14 @@ function SheetsList({
   return (
     <Stack gap="sm">
       {filterBanner}
+      <div className="css-grid-cards">
       {sorted.map((sheet) => {
         const done = sheet.panels.filter((p) => p.status === 'done').length;
         const character = library.characters.find((c) => c.id === sheet.characterId);
         const thumb = sheet.panels.find((p) => p.outputs[0])?.outputs[0];
         return (
           <Card key={sheet.id} padding="sm">
-            <Group justify="space-between" align="center" wrap={false}>
+            <Group justify="space-between" align="center" wrap>
               <Group gap="sm" align="center" wrap={false} style={{ minWidth: 0 }}>
                 {thumb ? (
                   <img
@@ -281,7 +279,7 @@ function SheetsList({
                   </span>
                 </Stack>
               </Group>
-              <Group gap="sm" align="center">
+              <Group gap="sm" align="center" wrap>
                 <Badge
                   color={
                     sheet.status === 'complete'
@@ -302,6 +300,7 @@ function SheetsList({
           </Card>
         );
       })}
+      </div>
     </Stack>
   );
 }

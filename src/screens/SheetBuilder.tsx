@@ -841,7 +841,7 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
               <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>
                 Panels ({selectedSpecs.length}/{allSpecs.length})
               </div>
-              <Stack gap="xs">
+              <div className="css-panel-picker">
                 {allSpecs.map((spec, i) => (
                   <label
                     key={`${spec.kind}-${i}`}
@@ -870,7 +870,7 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
                     )}
                   </label>
                 ))}
-              </Stack>
+              </div>
             </div>
 
             <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 14, cursor: character?.referenceImage ? 'pointer' : 'default', opacity: character?.referenceImage ? 1 : 0.5 }}>

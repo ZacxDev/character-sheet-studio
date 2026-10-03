@@ -5,7 +5,12 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createPostErrorCopy } from './posting.js';
+import {
+  POSTS_SCOPE,
+  createPostErrorCopy,
+  hasPostsScope,
+  isScopeShapedPostError,
+} from './posting.js';
 
 describe('createPostErrorCopy', () => {
   it('stays silent when the viewer declined the host confirm', () => {
@@ -61,5 +66,35 @@ describe('createPostErrorCopy', () => {
       action: 'notice',
       message: expect.stringContaining('try again'),
     });
+  });
+});
+
+describe('posts scope helpers', () => {
+  it('hasPostsScope checks the token scope list', () => {
+    expect(POSTS_SCOPE).toBe('posts:write:self');
+    expect(hasPostsScope(['ai:write:budgeted', 'posts:write:self'])).toBe(true);
+    expect(hasPostsScope(['ai:write:budgeted'])).toBe(false);
+    expect(hasPostsScope([])).toBe(false);
+    expect(hasPostsScope(undefined)).toBe(false);
+    expect(hasPostsScope(null)).toBe(false);
+  });
+
+  it('isScopeShapedPostError catches grant failures, not other errors', () => {
+    expect(isScopeShapedPostError({ code: 'no block token' })).toBe(true);
+    expect(
+      isScopeShapedPostError({ message: 'posts:write:self scope not granted' }),
+    ).toBe(true);
+    expect(isScopeShapedPostError({ message: '403 Forbidden' })).toBe(true);
+    expect(isScopeShapedPostError({ message: 'Permission denied for this user' })).toBe(
+      true,
+    );
+    // Ordinary failures are NOT scope-shaped.
+    expect(isScopeShapedPostError({ code: 'declined', declined: true })).toBe(false);
+    expect(isScopeShapedPostError({ code: 'no images to post' })).toBe(false);
+    expect(isScopeShapedPostError({ message: 'Post service unavailable' })).toBe(false);
+    expect(isScopeShapedPostError({ timedOut: true, message: 'GENERATION_TIMEOUT' })).toBe(
+      false,
+    );
+    expect(isScopeShapedPostError({})).toBe(false);
   });
 });

@@ -272,6 +272,14 @@ describe('Sheet View post-to-profile', () => {
         outbound.some((m) => m.type === 'CREATE_POST_FROM_APP'),
       ).toBe(true),
     );
+    // Consent BEFORE the post call: the token starts without
+    // posts:write:self, so the app prompts and only posts after the grant —
+    // never an error wall.
+    const consentIdx = outbound.findIndex((m) => m.type === 'REQUEST_CONSENT');
+    const postIdx = outbound.findIndex((m) => m.type === 'CREATE_POST_FROM_APP');
+    expect(consentIdx).toBeGreaterThanOrEqual(0);
+    expect(consentIdx).toBeLessThan(postIdx);
+    expect(JSON.stringify(outbound[consentIdx]?.payload)).toContain('posts:write:self');
     const postMsg = outbound.find((m) => m.type === 'CREATE_POST_FROM_APP');
     expect(JSON.stringify(postMsg?.payload)).toContain('"workflowId":"wf-front"');
     expect(JSON.stringify(postMsg?.payload)).toContain('[0]');
@@ -380,5 +388,66 @@ describe('Sheet View post-to-profile', () => {
           s.panels.every((p) => p.posted === true),
       ),
     ).toBe(true);
+  });
+
+  it('consent refused: honest note, no post attempted', async () => {
+    const outbound: Outbound[] = [];
+    uninstall = installMockMoneyHost({
+      consentGrantable: false,
+      onOutbound: (msg) => {
+        outbound.push(msg as Outbound);
+      },
+    });
+    const user = userEvent.setup();
+    render(
+      <SheetView
+        library={stubLibrary({ sheets: [doneSheet()] })}
+        sheetId="sheet-1"
+        onBack={() => {}}
+      />,
+    );
+
+    const postButtons = await screen.findAllByTestId('se-panel-post');
+    await user.click(postButtons[0]);
+
+    const notice = await screen.findByTestId('se-post-notice');
+    expect(notice).toHaveTextContent(/permission/);
+    expect(outbound.some((m) => m.type === 'REQUEST_CONSENT')).toBe(true);
+    expect(outbound.some((m) => m.type === 'CREATE_POST_FROM_APP')).toBe(false);
+    expect(postButtons[0]).toHaveTextContent('Post');
+    expect(postButtons[0]).not.toBeDisabled();
+  });
+
+  it('a scope failure after consent becomes the notice after ONE round-trip', async () => {
+    const outbound: Outbound[] = [];
+    uninstall = installMockMoneyHost({
+      createPostError: 'no block token',
+      onOutbound: (msg) => {
+        outbound.push(msg as Outbound);
+      },
+    });
+    const user = userEvent.setup();
+    render(
+      <SheetView
+        library={stubLibrary({ sheets: [doneSheet()] })}
+        sheetId="sheet-1"
+        onBack={() => {}}
+      />,
+    );
+
+    const postButtons = await screen.findAllByTestId('se-panel-post');
+    await user.click(postButtons[0]);
+
+    // The post was attempted (after the pre-flight consent), failed
+    // scope-shaped, and did NOT loop another consent dialog.
+    const notice = await screen.findByTestId('se-post-notice');
+    expect(notice).toHaveTextContent(/isn’t available in this context/);
+    expect(
+      outbound.filter((m) => m.type === 'CREATE_POST_FROM_APP').length,
+    ).toBe(1);
+    expect(
+      outbound.filter((m) => m.type === 'REQUEST_CONSENT').length,
+    ).toBe(1);
+    expect(postButtons[0]).toHaveTextContent('Post');
   });
 });

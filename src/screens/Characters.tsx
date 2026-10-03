@@ -102,10 +102,10 @@ export function Characters({ library, onBuildSheet, onViewSheets }: CharactersPr
         </Card>
       )}
 
-      <Stack gap="sm">
+      <div className="css-grid-cards">
         {library.characters.map((c) => (
           <Card key={c.id}>
-            <Group justify="space-between" align="flex-start">
+            <Group justify="space-between" align="flex-start" wrap>
               <div style={{ display: 'flex', gap: 12, minWidth: 0 }}>
                 {c.referenceImage && (
                   <img
@@ -150,7 +150,7 @@ export function Characters({ library, onBuildSheet, onViewSheets }: CharactersPr
                   </Group>
                 </div>
               </div>
-              <Group gap="xs">
+              <Group gap="xs" wrap>
                 <Button size="sm" variant="light" onClick={() => onBuildSheet(c.id)}>
                   Build sheet
                 </Button>
@@ -184,7 +184,7 @@ export function Characters({ library, onBuildSheet, onViewSheets }: CharactersPr
             )}
           </Card>
         ))}
-      </Stack>
+      </div>
     </Stack>
   );
 }

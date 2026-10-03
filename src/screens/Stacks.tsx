@@ -143,16 +143,16 @@ export function Stacks({ library }: StacksProps) {
         </Card>
       )}
 
-      <Stack gap="sm">
+      <div className="css-grid-cards">
         {library.stacks.map((s) => (
           <Card key={s.id}>
-            <Group justify="space-between" align="flex-start">
+            <Group justify="space-between" align="flex-start" wrap>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 600 }}>{s.name}</div>
                 <div style={{ fontSize: 13, opacity: 0.75 }}>
                   {checkpointDisplayLabel(s.checkpoint)}
                 </div>
-                <Group gap="xs" style={{ marginTop: 6 }}>
+                <Group gap="xs" wrap style={{ marginTop: 6 }}>
                   <Badge size="sm" variant="light">
                     {s.loras.length} LoRA{s.loras.length === 1 ? '' : 's'}
                   </Badge>
@@ -163,7 +163,7 @@ export function Stacks({ library }: StacksProps) {
                   ))}
                 </Group>
               </div>
-              <Group gap="xs">
+              <Group gap="xs" wrap>
                 <Button size="sm" variant="subtle" onClick={() => setEditor({ mode: 'edit', id: s.id })}>
                   Edit
                 </Button>
@@ -186,7 +186,7 @@ export function Stacks({ library }: StacksProps) {
             )}
           </Card>
         ))}
-      </Stack>
+      </div>
     </Stack>
   );
 }

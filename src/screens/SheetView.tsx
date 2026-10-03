@@ -46,6 +46,9 @@ import { startPollLoop } from '../money/pollLoop.js';
 import { buildSheetPanelBody } from '../sheet/body.js';
 import {
   createPostErrorCopy,
+  hasPostsScope,
+  isScopeShapedPostError,
+  POSTS_SCOPE,
   type CreatePostErrorLike,
 } from '../sheet/posting.js';
 import {
@@ -142,6 +145,16 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
   // last post outcome message (Posted ✓ / error copy from posting.ts).
   const [posting, setPosting] = useState<string | null>(null);
   const [postNotice, setPostNotice] = useState<string | null>(null);
+  // The posts:write:self grant state + the post parked behind its consent
+  // prompt. `postConsentTriedRef` is the one-round-trip guard: a scope
+  // failure AFTER a consent round-trip becomes the honest notice instead of
+  // looping consent dialogs.
+  const postsGranted = hasPostsScope(token?.scopes);
+  const postIntentRef = useRef<(() => void) | null>(null);
+  const postConsentTriedRef = useRef(false);
+  // useBlockToken spreads a fresh object every render, so identity can't
+  // detect a re-mint — the raw JWT string can (it changes on every mint).
+  const tokenRawRef = useRef(token?.raw);
 
   const sheetRef = useRef(sheet);
   sheetRef.current = sheet;
@@ -518,9 +531,10 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
     }
   }, [granted]);
 
-  // A consent refusal is final for this environment.
+  // A consent refusal is final for this environment. Scoped to GENERATION
+  // intents — the post flow parks its own intent and handles refusal itself.
   useEffect(() => {
-    if (refusal && consentWait) {
+    if (refusal && (consentIntentRef.current || submitAllIntentRef.current)) {
       consentIntentRef.current = null;
       submitAllIntentRef.current = false;
       setConsentWait(false);
@@ -528,7 +542,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
         'Spending approval isn’t available in this environment, so panels can’t be regenerated here.',
       );
     }
-  }, [refusal, consentWait]);
+  }, [refusal]);
 
   // --- cancel ------------------------------------------------------------------
 
@@ -605,9 +619,77 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
   // posting.ts: declined → silent, timeout → "check your profile", never
   // auto-retry.
 
+  // Posting publishes to the viewer's PROFILE — a consent-gated scope
+  // (posts:write:self). Asking the host cold hits a scope error, so Post
+  // checks the token first: no grant → park the action behind the consent
+  // prompt and resume it when the host answers (the refreshed token carries
+  // the scope, or the grant is action-scoped and the per-call host confirm
+  // is the final gate). A scope-shaped failure despite that gets ONE
+  // consent round-trip; the second failure is the honest notice.
+
+  const consentForPost = useCallback(
+    (action: () => void) => {
+      postIntentRef.current = action;
+      postConsentTriedRef.current = true;
+      setConsentWait(true);
+      requestConsent({ scopes: [POSTS_SCOPE] });
+    },
+    [requestConsent],
+  );
+
+  const runPost = useCallback(
+    (action: () => void) => {
+      if (anon) {
+        requestSignIn();
+        setPostNotice('Sign in to post to your profile.');
+        return;
+      }
+      if (postsGranted) {
+        action();
+        return;
+      }
+      consentForPost(action);
+    },
+    [anon, consentForPost, postsGranted, requestSignIn],
+  );
+
+  // Resume the parked post when the host answers the consent request: the
+  // refreshed token either carries the scope or (in hosts that scope the
+  // grant to the action) simply signals the grant — the per-call host
+  // confirm remains the final gate. A re-mint is detected by the raw JWT
+  // changing (useBlockToken returns a fresh object identity every render).
+  useEffect(() => {
+    const rawChanged = token?.raw !== tokenRawRef.current;
+    tokenRawRef.current = token?.raw;
+    const action = postIntentRef.current;
+    if (!action) return;
+    if (!postsGranted && !rawChanged) return;
+    postIntentRef.current = null;
+    setConsentWait(false);
+    action();
+  }, [postsGranted, token]);
+
+  // A refused post consent: honest note, never an error wall.
+  useEffect(() => {
+    if (refusal && postIntentRef.current) {
+      postIntentRef.current = null;
+      postConsentTriedRef.current = false;
+      setConsentWait(false);
+      setPostNotice(
+        'Posting needs the “post to your profile” permission, which isn’t available in this environment.',
+      );
+    }
+  }, [refusal]);
+
   const handlePostError = useCallback(
-    (err: unknown) => {
-      const copy = createPostErrorCopy((err ?? {}) as CreatePostErrorLike);
+    (err: unknown, retry: () => void) => {
+      const e = (err ?? {}) as CreatePostErrorLike;
+      // Scope-shaped failure despite everything → one consent round-trip.
+      if (isScopeShapedPostError(e) && !postConsentTriedRef.current) {
+        consentForPost(retry);
+        return;
+      }
+      const copy = createPostErrorCopy(e);
       if (copy.action === 'sign-in') {
         requestSignIn();
         setPostNotice('Sign in to post to your profile.');
@@ -616,10 +698,10 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
       }
       // 'silent' — the viewer dismissed the host confirm themselves.
     },
-    [requestSignIn],
+    [consentForPost, requestSignIn],
   );
 
-  const postPanel = useCallback(
+  const doPostPanel = useCallback(
     async (panel: SheetPanel) => {
       if (!panel.workflowId || !sheet) return;
       setPostNotice(null);
@@ -632,6 +714,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
           title: panel.label,
           detail: `From the sheet “${sheet.name}” — made with Character Sheet Studio.`,
         });
+        postConsentTriedRef.current = false;
         await setPanel(panel.id, (p) => ({
           ...p,
           posted: true,
@@ -639,7 +722,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
         }));
         setPostNotice('Posted to your profile ✓');
       } catch (err) {
-        handlePostError(err);
+        handlePostError(err, () => void doPostPanel(panel));
       } finally {
         setPosting(null);
       }
@@ -647,7 +730,14 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
     [createPost, handlePostError, setPanel, sheet],
   );
 
-  const postSheet = useCallback(async () => {
+  const postPanel = useCallback(
+    (panel: SheetPanel) => {
+      runPost(() => void doPostPanel(panel));
+    },
+    [doPostPanel, runPost],
+  );
+
+  const doPostSheet = useCallback(async () => {
     if (!sheet) return;
     // Only panels not already in a post — the server refuses (or duplicates)
     // images that are already posted.
@@ -669,6 +759,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
         title: sheet.name,
         detail: `Character sheet — made with Character Sheet Studio.`,
       });
+      postConsentTriedRef.current = false;
       const targetIds = new Set(targets.map((t) => t.id));
       await updateSheet((s) => ({
         ...s,
@@ -679,11 +770,15 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
       }));
       setPostNotice('Posted to your profile ✓');
     } catch (err) {
-      handlePostError(err);
+      handlePostError(err, () => void doPostSheet());
     } finally {
       setPosting(null);
     }
   }, [createPost, handlePostError, sheet, updateSheet]);
+
+  const postSheet = useCallback(() => {
+    runPost(() => void doPostSheet());
+  }, [doPostSheet, runPost]);
 
   // --- rename / delete -------------------------------------------------------------
 
@@ -887,13 +982,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
         )
       )}
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-          gap: 12,
-        }}
-      >
+      <div className="css-panel-grid">
         {sheet.panels.map((panel) => {
           const busy = busyPanel === panel.id;
           const errCopy = panel.errorCode
