@@ -24,10 +24,10 @@ const OUT = path.resolve(
 );
 fs.mkdirSync(OUT, { recursive: true });
 
-// 1x1 violet PNG — stretched by CSS into the image boxes; layout is what
+// 1x1 ink-gray PNG — stretched by CSS into the image boxes; layout is what
 // we're validating, not art.
 const PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEBgIApD5fRAAAAABJRU5ErkJggg==',
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNQU9MGAADtAHibSjiOAAAAAElFTkSuQmCC',
   'base64',
 );
 
@@ -36,7 +36,7 @@ const HIDE_DEV_CHROME = `
   [data-harness="true"] > details { display: none !important; }
   /* The harness page extends past the app on tall viewports — paint it the
      app's dark body color so shots show the slab the host frame would. */
-  html, body { background: #100e14; }
+  html, body { background: #0a0a0b; }
 `;
 
 const browser = await puppeteer.launch({
