@@ -377,10 +377,16 @@ describe('Sheet View post-to-profile', () => {
     expect(payload).toContain('"workflowId":"wf-front"');
     expect(payload).toContain('"workflowId":"wf-side"');
 
-    await waitFor(() =>
-      expect(screen.getByTestId('se-post-sheet')).toHaveTextContent('Posted ✓'),
+    // Once everything is posted, the sheet-level button retires into a
+    // "Posted ✓ + View post" link — no dead control left behind (each
+    // panel carries its own View post link too).
+    const viewPostLinks = await screen.findAllByRole('link', { name: 'View post' });
+    expect(viewPostLinks.length).toBeGreaterThan(0);
+    expect(viewPostLinks[0]).toHaveAttribute(
+      'href',
+      'https://civitai.com/posts/4242',
     );
-    expect(screen.getByTestId('se-post-sheet')).toBeDisabled();
+    expect(screen.queryByTestId('se-post-sheet')).not.toBeInTheDocument();
     expect(
       saved.some(
         (s) =>

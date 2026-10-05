@@ -46,6 +46,13 @@ import { storeErrorMessage } from './common.js';
 
 export interface StacksProps {
   library: SheetLibrary;
+  /** Open the create editor on arrival (the Builder sent the viewer here). */
+  autoOpenCreate?: boolean;
+  onAutoOpenConsumed?: () => void;
+  /** A new stack was saved (create mode) — the return trip home. */
+  onCreated?: (stackId: string) => void;
+  /** The create editor was closed without saving. */
+  onCreateCancelled?: () => void;
 }
 
 type EditorState = { mode: 'create' } | { mode: 'edit'; id: string } | null;
@@ -85,10 +92,26 @@ function loraFromPick(info: BlockResourceInfo): StackLora {
   };
 }
 
-export function Stacks({ library }: StacksProps) {
+export function Stacks({
+  library,
+  autoOpenCreate,
+  onAutoOpenConsumed,
+  onCreated,
+  onCreateCancelled,
+}: StacksProps) {
   const [editor, setEditor] = useState<EditorState>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Arriving from the Builder's "create a stack" detour: open the editor
+  // immediately so the trip feels like one step.
+  useEffect(() => {
+    if (autoOpenCreate) {
+      setEditor({ mode: 'create' });
+      onAutoOpenConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpenCreate]);
 
   // Sheet count per stack — what a delete would orphan.
   const sheetsByStack = new Map<string, number>();
@@ -128,8 +151,15 @@ export function Stacks({ library }: StacksProps) {
               ? library.stacks.find((s) => s.id === editor.id)
               : undefined
           }
-          onClose={() => setEditor(null)}
-          onSaved={() => setEditor(null)}
+          onClose={() => {
+            if (editor.mode === 'create') onCreateCancelled?.();
+            setEditor(null);
+          }}
+          onSaved={(saved) => {
+            const wasCreate = editor.mode === 'create';
+            setEditor(null);
+            if (wasCreate) onCreated?.(saved.id);
+          }}
           saveStack={library.saveStack}
         />
       )}
@@ -196,7 +226,7 @@ export function Stacks({ library }: StacksProps) {
 interface EditorProps {
   initial?: ModelStack;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved: ModelStack) => void;
   saveStack: SheetLibrary['saveStack'];
 }
 
@@ -349,7 +379,7 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
       setError(storeErrorMessage(err));
       return;
     }
-    onSaved();
+    onSaved(stack);
   };
 
   return (
@@ -452,6 +482,10 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
                         )
                       }
                     />
+                    <div style={{ fontSize: 12, opacity: 0.65, marginTop: 2 }}>
+                      Typical is 0.6–1.0 — higher leans harder into the LoRA’s
+                      style, lower just hints at it.
+                    </div>
                   </div>
                   <Button
                     size="sm"

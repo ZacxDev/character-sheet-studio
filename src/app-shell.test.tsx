@@ -55,9 +55,13 @@ describe('App shell smoke test', () => {
       expect(screen.getByText(/built from a character/)).toBeInTheDocument(),
     );
     await user.click(screen.getByTestId('builder-create-character'));
-    await waitFor(() =>
-      expect(screen.getByText(/No characters yet/)).toBeInTheDocument(),
-    );
+    // Return trip: the create editor opens straight away (not a bare list),
+    // and saving lands back in the Builder with the character selected.
+    const nameInput = await screen.findByTestId('char-name');
+    await user.type(nameInput, 'Testling');
+    await user.click(screen.getByTestId('char-save'));
+    // Back in the Builder — which now funnels to the next missing piece.
+    await screen.findByTestId('builder-create-stack');
 
     // Sheets tab.
     await user.click(screen.getByRole('tab', { name: 'Sheets' }));

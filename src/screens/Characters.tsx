@@ -5,7 +5,7 @@
 // (uploaded as a PRIVATE img2img source via the host), and a seed policy.
 // Everything persists through the sheet library (app storage, best-effort).
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { useImageUpload } from '@civitai/blocks-react';
 import {
@@ -36,6 +36,13 @@ export interface CharactersProps {
   onBuildSheet: (characterId: string) => void;
   /** Jump to the Sheets tab filtered to this character's sheets. */
   onViewSheets: (characterId: string) => void;
+  /** Open the create editor on arrival (the Builder sent the viewer here). */
+  autoOpenCreate?: boolean;
+  onAutoOpenConsumed?: () => void;
+  /** A new character was saved (create mode) — the return trip home. */
+  onCreated?: (characterId: string) => void;
+  /** The create editor was closed without saving. */
+  onCreateCancelled?: () => void;
 }
 
 type EditorState = { mode: 'create' } | { mode: 'edit'; id: string } | null;
@@ -44,10 +51,28 @@ function seedPolicyLabel(p: SeedPolicy): string {
   return p === 'locked' ? 'Locked (reproducible)' : 'Varied (random per panel)';
 }
 
-export function Characters({ library, onBuildSheet, onViewSheets }: CharactersProps) {
+export function Characters({
+  library,
+  onBuildSheet,
+  onViewSheets,
+  autoOpenCreate,
+  onAutoOpenConsumed,
+  onCreated,
+  onCreateCancelled,
+}: CharactersProps) {
   const [editor, setEditor] = useState<EditorState>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Arriving from the Builder's "create a character" detour: open the
+  // editor immediately so the trip feels like one step.
+  useEffect(() => {
+    if (autoOpenCreate) {
+      setEditor({ mode: 'create' });
+      onAutoOpenConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpenCreate]);
 
   const editing: Character | undefined =
     editor?.mode === 'edit'
@@ -87,8 +112,15 @@ export function Characters({ library, onBuildSheet, onViewSheets }: CharactersPr
           key={editor.mode === 'edit' ? editor.id : 'create'}
           initial={editing}
           stacks={library.stacks}
-          onClose={() => setEditor(null)}
-          onSaved={() => setEditor(null)}
+          onClose={() => {
+            if (editor.mode === 'create') onCreateCancelled?.();
+            setEditor(null);
+          }}
+          onSaved={(saved) => {
+            const wasCreate = editor.mode === 'create';
+            setEditor(null);
+            if (wasCreate) onCreated?.(saved.id);
+          }}
           saveCharacter={library.saveCharacter}
         />
       )}
@@ -195,7 +227,7 @@ interface EditorProps {
   initial?: Character;
   stacks: ModelStack[];
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved: Character) => void;
   saveCharacter: SheetLibrary['saveCharacter'];
 }
 
@@ -267,7 +299,7 @@ function CharacterEditor({ initial, stacks, onClose, onSaved, saveCharacter }: E
       setError(storeErrorMessage(err));
       return;
     }
-    onSaved();
+    onSaved(char);
   };
 
   return (
@@ -309,6 +341,10 @@ function CharacterEditor({ initial, stacks, onClose, onSaved, saveCharacter }: E
           value={triggerWords}
           onChange={(e) => setTriggerWords(e.currentTarget.value)}
         />
+        <div style={{ fontSize: 12, opacity: 0.65, marginTop: -6 }}>
+          Words that switch on this character’s look (usually from their
+          LoRA) — they’re added to every prompt for this character.
+        </div>
         <Textarea
           label="Negative prompt"
           placeholder="blurry, watermark, deformed"

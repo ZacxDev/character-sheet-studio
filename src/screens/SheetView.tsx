@@ -60,7 +60,7 @@ import {
   type PanelErrorCode,
 } from '../sheet/batch.js';
 import type { SheetJob, SheetPanel } from '../sheet/types.js';
-import { SHEET_STATUS_LABEL } from '../sheet/types.js';
+import { isTerminalPanelStatus } from '../sheet/types.js';
 import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
 import { storeErrorMessage } from './common.js';
 
@@ -72,6 +72,15 @@ interface SheetViewProps {
 
 function randomSeed(): number {
   return Math.floor(Math.random() * 2_147_483_647);
+}
+
+/** Elapsed wait for a running panel, m:ss — null when it never started here. */
+function formatElapsed(startedAt: string | undefined, nowMs: number): string | null {
+  if (!startedAt) return null;
+  const start = Date.parse(startedAt);
+  if (Number.isNaN(start)) return null;
+  const secs = Math.max(0, Math.floor((nowMs - start) / 1000));
+  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 }
 
 const STATUS_LABEL: Record<SheetPanel['status'], string> = {
@@ -137,7 +146,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
   // behind ONE confirm showing the total, then submitted sequentially.
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchConfirm, setBatchConfirm] = useState<{
-    items: { panelId: string; next: SheetPanel }[];
+    items: { panelId: string; next: SheetPanel; cost: number }[];
     total: number;
   } | null>(null);
   const submitAllIntentRef = useRef(false);
@@ -145,6 +154,18 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
   // last post outcome message (Posted ✓ / error copy from posting.ts).
   const [posting, setPosting] = useState<string | null>(null);
   const [postNotice, setPostNotice] = useState<string | null>(null);
+  // Which panel's "More" menu (Export / Publish / New variation) is open.
+  const [menuPanelId, setMenuPanelId] = useState<string | null>(null);
+  // 1s ticker that only runs while a panel is generating — drives the
+  // elapsed-time readout on running panels.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const anyRunning = sheet?.panels.some((p) => p.status === 'running') ?? false;
+  useEffect(() => {
+    if (!anyRunning) return;
+    setNowMs(Date.now());
+    const t = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [anyRunning]);
   // The posts:write:self grant state + the post parked behind its consent
   // prompt. `postConsentTriedRef` is the one-round-trip guard: a scope
   // failure AFTER a consent round-trip becomes the honest notice instead of
@@ -201,49 +222,115 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
   );
 
   // --- poll loops ------------------------------------------------------------
-  // Attach once per sheet open. A terminal snapshot STOPS its loop; the
-  // cleanup cancels whatever is still live on unmount.
+  // One loop per panel, keyed by panel id in a registry — so Cancel can stop
+  // EXACTLY the loop that would otherwise resurrect its panel by stamping
+  // 'running' over the canceled state on the next snapshot (the audit's
+  // zombie-panel bug: cancel changed the status but left the loop alive).
+  // Every snapshot is also revalidated against the panel's CURRENT state:
+  // a panel that is terminal or has moved to a different workflow ignores
+  // the loop, and the loop retires itself.
 
   const pollRef = useRef(poll);
   pollRef.current = poll;
 
-  useEffect(() => {
-    const cur = sheetRef.current;
-    if (!cur) return;
-    const cancels: Array<() => void> = [];
-    for (const panel of resumablePanels(cur.panels)) {
-      const workflowId = panel.workflowId as string;
+  const pollLoopsRef = useRef(new Map<string, () => void>());
+
+  const stopPanelLoop = useCallback((panelId: string) => {
+    const stop = pollLoopsRef.current.get(panelId);
+    if (stop) {
+      pollLoopsRef.current.delete(panelId);
+      stop();
+    }
+  }, []);
+
+  const stopAllPanelLoops = useCallback(() => {
+    const loops = pollLoopsRef.current;
+    pollLoopsRef.current = new Map();
+    for (const stop of loops.values()) stop();
+  }, []);
+
+  const startPanelLoop = useCallback(
+    (panelId: string, workflowId: string) => {
+      stopPanelLoop(panelId);
       const cancelLoop = startPollLoop(pollRef.current, workflowId, {
         onSnapshot: (snap: BlockWorkflowSnapshot) => {
+          const current = sheetRef.current?.panels.find((p) => p.id === panelId);
+          if (
+            !current ||
+            current.workflowId !== workflowId ||
+            isTerminalPanelStatus(current.status)
+          ) {
+            stopPanelLoop(panelId);
+            return;
+          }
           if (snap.status === 'succeeded') {
-            void setPanel(panel.id, (p) => ({
+            stopPanelLoop(panelId);
+            void setPanel(panelId, (p) => ({
               ...p,
               status: 'done',
               outputs: snap.imageUrls ?? [],
               errorCode: undefined,
             }));
           } else if (isTerminalStatus(snap.status)) {
+            stopPanelLoop(panelId);
             void failPanel(
-              panel.id,
+              panelId,
               pricedKindToErrorCode(classifyPricedFailure(snap.error)),
             );
           } else {
-            void setPanel(panel.id, (p) => ({ ...p, status: 'running' }));
+            void setPanel(panelId, (p) =>
+              p.status === 'running'
+                ? p
+                : {
+                    ...p,
+                    status: 'running',
+                    startedAt: p.startedAt ?? new Date().toISOString(),
+                  },
+            );
           }
         },
         onUnreachable: () => {
+          stopPanelLoop(panelId);
           // Transport is down, not the workflow — keep the workflowId so a
           // later visit resumes it.
-          void failPanel(panel.id, 'poll-unreachable');
+          void failPanel(panelId, 'poll-unreachable');
         },
       });
-      cancels.push(cancelLoop);
+      pollLoopsRef.current.set(panelId, cancelLoop);
+    },
+    [failPanel, setPanel, stopPanelLoop],
+  );
+  const startPanelLoopRef = useRef(startPanelLoop);
+  startPanelLoopRef.current = startPanelLoop;
+
+  // Resume on open: attach a loop to every live workflow. Also heal any
+  // panel persisted as 'running' WITHOUT a workflowId (zombie state left
+  // behind by the pre-fix cancel bug) back to queued, where Submit is
+  // possible again — a revisit must never show a running panel with no
+  // action that can resolve it.
+  const sheetPresent = sheet !== null;
+  useEffect(() => {
+    if (!sheetPresent) return;
+    const cur = sheetRef.current;
+    if (!cur) return;
+    if (cur.panels.some((p) => p.status === 'running' && !p.workflowId)) {
+      void updateSheetRef.current((s) => ({
+        ...s,
+        panels: s.panels.map((p) =>
+          p.status === 'running' && !p.workflowId
+            ? { ...p, status: 'queued', startedAt: undefined }
+            : p,
+        ),
+      }));
+    }
+    for (const panel of resumablePanels(cur.panels)) {
+      startPanelLoopRef.current(panel.id, panel.workflowId as string);
     }
     return () => {
-      for (const c of cancels) c();
+      stopAllPanelLoops();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sheetId]);
+  }, [sheetId, sheetPresent]);
 
   // --- regenerate / retry ----------------------------------------------------
 
@@ -337,7 +424,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
     setError(null);
     setBatchConfirm(null);
     setPanelConfirm(null);
-    const items: { panelId: string; next: SheetPanel }[] = [];
+    const items: { panelId: string; next: SheetPanel; cost: number }[] = [];
     let total = 0;
     try {
       for (const panel of queued) {
@@ -362,7 +449,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
             await failPanel(panel.id, pricedKindToErrorCode(classifyPricedFailure(est.error)));
             continue;
           }
-          items.push({ panelId: panel.id, next });
+          items.push({ panelId: panel.id, next, cost });
           total += cost;
         } catch {
           await failPanel(panel.id, 'estimate-failed');
@@ -417,30 +504,12 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
             }
             return;
           }
-          await setPanel(panelId, () => ({ ...next, workflowId: snap.workflowId }));
-          const cancelLoop = startPollLoop(pollRef.current, snap.workflowId, {
-            onSnapshot: (s2: BlockWorkflowSnapshot) => {
-              if (s2.status === 'succeeded') {
-                void setPanel(panelId, (p) => ({
-                  ...p,
-                  status: 'done',
-                  outputs: s2.imageUrls ?? [],
-                  errorCode: undefined,
-                }));
-              } else if (isTerminalStatus(s2.status)) {
-                void failPanel(
-                  panelId,
-                  pricedKindToErrorCode(classifyPricedFailure(s2.error)),
-                );
-              } else {
-                void setPanel(panelId, (p) => ({ ...p, status: 'running' }));
-              }
-            },
-            onUnreachable: () => {
-              void failPanel(panelId, 'poll-unreachable');
-            },
-          });
-          pollCancelsRef.current.push(cancelLoop);
+          await setPanel(panelId, () => ({
+            ...next,
+            workflowId: snap.workflowId,
+            startedAt: new Date().toISOString(),
+          }));
+          startPanelLoopRef.current(panelId, snap.workflowId);
         } catch (err) {
           const rej = classifySubmitRejection(err);
           if (rej.kind === 'workflow-failed' && rej.pollWorkflowId) {
@@ -448,7 +517,9 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
             await setPanel(panelId, () => ({
               ...next,
               workflowId: rej.pollWorkflowId as string,
+              startedAt: new Date().toISOString(),
             }));
+            startPanelLoopRef.current(panelId, rej.pollWorkflowId as string);
           } else if (rej.kind === 'exception') {
             await failPanel(panelId, 'submit-interrupted');
           } else {
@@ -468,7 +539,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
     const c = panelConfirm;
     if (!c) return;
     setPanelConfirm(null);
-    void runPanelSubmitRef.current(c.panelId, c.next);
+    void runPanelSubmitRef.current(c.panelId, { ...c.next, cost: c.cost });
   }, [panelConfirm]);
 
   /** Submit the priced batch sequentially; each submit starts its own poll. */
@@ -477,17 +548,9 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
     if (!c) return;
     setBatchConfirm(null);
     for (const item of c.items) {
-      await runPanelSubmitRef.current(item.panelId, item.next);
+      await runPanelSubmitRef.current(item.panelId, { ...item.next, cost: item.cost });
     }
   }, [batchConfirm]);
-  const pollCancelsRef = useRef<Array<() => void>>([]);
-  useEffect(() => {
-    const cancels = pollCancelsRef.current;
-    return () => {
-      for (const c of cancels) c();
-      cancels.length = 0;
-    };
-  }, []);
 
   const startPanelAction = useCallback(
     (panelId: string, mode: 'retry' | 'regenerate') => {
@@ -550,25 +613,32 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
     async (panel: SheetPanel) => {
       if (!panel.workflowId) return;
       setBusyPanel(panel.id);
+      // Stop the poll loop FIRST. As long as it lives, its snapshots keep
+      // stamping 'running' over any local state — the audit verified the
+      // panel still reading "Generating…" 8s after cancel, persisted as
+      // running-with-no-workflow (a zombie no action could resolve).
+      stopPanelLoop(panel.id);
       try {
         await cancel(panel.workflowId);
       } catch {
         // Best-effort: the orchestrator may already be done. Either way the
         // panel leaves the live set.
       } finally {
-        // Bump the nonce: a later retry must not idempotently replay the
-        // canceled workflow.
+        // Canceled is terminal and LOCAL: the snapshot guard now ignores
+        // any stray loop output for this panel. Bump the nonce so a later
+        // "Submit again" never idempotently replays the canceled workflow.
         await setPanel(panel.id, (p) => ({
           ...p,
-          status: 'queued',
+          status: 'canceled',
           workflowId: undefined,
+          startedAt: undefined,
           errorCode: undefined,
           submitNonce: p.submitNonce + 1,
         }));
         setBusyPanel(null);
       }
     },
-    [cancel, setPanel],
+    [cancel, setPanel, stopPanelLoop],
   );
 
   // --- export / publish ----------------------------------------------------------
@@ -833,6 +903,18 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
   const stack = library.stacks.find((s) => s.id === sheet.stackId);
   const doneCount = sheet.panels.filter((p) => p.status === 'done').length;
   const queuedPanels = sheet.panels.filter((p) => p.status === 'queued' && !p.workflowId);
+  // Done panels the sheet-level Post can still publish, and the batch-level
+  // insufficient-balance group (ONE banner, not one alert per panel).
+  const unpostedDone = sheet.panels.filter(
+    (p) => p.status === 'done' && p.workflowId && !p.posted,
+  );
+  const unaffordablePanels = sheet.panels.filter(
+    (p) => p.status === 'failed' && p.errorCode === 'unaffordable',
+  );
+  const sharedFailureIds =
+    unaffordablePanels.length >= 2
+      ? new Set(unaffordablePanels.map((p) => p.id))
+      : new Set<string>();
 
   return (
     <Stack gap="md">
@@ -886,38 +968,37 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
           )}
           <div style={{ fontSize: 14, opacity: 0.8 }}>
             {character?.name ?? 'Unknown character'} · {stack?.name ?? 'Unknown stack'} ·{' '}
-            {doneCount}/{sheet.panels.length} panels done · seed {sheet.seed}
+            {doneCount}/{sheet.panels.length} panels done
           </div>
-          <div>
-            <Badge color={sheet.status === 'complete' ? 'success' : sheet.status === 'failed' ? 'error' : 'info'}>
-              {SHEET_STATUS_LABEL[sheet.status]}
-            </Badge>
-          </div>
-          <Group gap="sm" align="center">
-            <Button
-              size="sm"
-              variant="light"
-              loading={posting === 'sheet'}
-              disabled={
-                posting !== null ||
-                !sheet.panels.some(
-                  (p) => p.status === 'done' && p.workflowId && !p.posted,
-                )
-              }
-              onClick={() => void postSheet()}
-              data-testid="se-post-sheet"
-            >
-              {sheet.postUrl &&
-              sheet.panels.every((p) => p.status !== 'done' || p.posted)
-                ? 'Posted ✓'
-                : sheet.postUrl
-                  ? 'Post new panels to profile'
-                  : 'Post sheet to profile'}
-            </Button>
-            {sheet.postUrl && (
-              <span style={{ fontSize: 13, opacity: 0.7 }}>{sheet.postUrl}</span>
-            )}
-          </Group>
+          {unpostedDone.length > 0 ? (
+            <Group gap="sm" align="center">
+              <Button
+                size="sm"
+                loading={posting === 'sheet'}
+                disabled={posting !== null}
+                onClick={() => void postSheet()}
+                data-testid="se-post-sheet"
+              >
+                {sheet.postUrl ? 'Post new panels to profile' : 'Post sheet to profile'}
+              </Button>
+              <span style={{ fontSize: 13, opacity: 0.7 }}>
+                {unpostedDone.length} finished panel
+                {unpostedDone.length === 1 ? '' : 's'} ready
+              </span>
+            </Group>
+          ) : sheet.postUrl ? (
+            <Group gap="sm" align="center">
+              <span style={{ fontSize: 13 }}>Posted ✓</span>
+              <a
+                href={sheet.postUrl}
+                target="_blank"
+                rel="noreferrer"
+                style={{ fontSize: 13 }}
+              >
+                View post
+              </a>
+            </Group>
+          ) : null}
         </Stack>
       </Card>
 
@@ -937,6 +1018,26 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
       {consentWait && (
         <Alert color="info">
           <Loader size="sm" /> Waiting for your approval in the Civitai dialog…
+        </Alert>
+      )}
+
+      {sharedFailureIds.size > 0 && (
+        <Alert color="error" title="Not enough Buzz" data-testid="se-batch-insufficient">
+          <Stack gap="xs">
+            <span style={{ fontSize: 13 }}>
+              {sharedFailureIds.size} panels couldn’t run — your Buzz balance
+              doesn’t cover them. Top up, then retry the panels you want.
+            </span>
+            <div>
+              <Button
+                size="sm"
+                variant="light"
+                onClick={() => void openPurchaseModal()}
+              >
+                Top up Buzz
+              </Button>
+            </div>
+          </Stack>
         </Alert>
       )}
 
@@ -985,19 +1086,29 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
       <div className="css-panel-grid">
         {sheet.panels.map((panel) => {
           const busy = busyPanel === panel.id;
-          const errCopy = panel.errorCode
-            ? panelErrorCopy(panel.errorCode as PanelErrorCode)
-            : null;
+          // A failure shared by 2+ panels is stated ONCE at sheet level;
+          // those panels keep only their Retry action.
+          const errCopy =
+            panel.errorCode && !sharedFailureIds.has(panel.id)
+              ? panelErrorCopy(panel.errorCode as PanelErrorCode)
+              : null;
           const confirming =
             panelConfirm?.panelId === panel.id && panel.status !== 'running';
+          const elapsed = formatElapsed(panel.startedAt, nowMs);
+          const menuOpen = menuPanelId === panel.id;
           return (
             <Card key={panel.id} padding="sm">
               <Stack gap="sm">
                 <Group justify="space-between" align="center">
                   <strong style={{ fontSize: 14 }}>{panel.label}</strong>
-                  <Badge color={STATUS_COLOR[panel.status]} variant="light">
-                    {busy ? 'Working…' : STATUS_LABEL[panel.status]}
-                  </Badge>
+                  {(busy ||
+                    panel.status === 'queued' ||
+                    panel.status === 'failed' ||
+                    panel.status === 'canceled') && (
+                    <Badge color={STATUS_COLOR[panel.status]} variant="light">
+                      {busy ? 'Working…' : STATUS_LABEL[panel.status]}
+                    </Badge>
+                  )}
                 </Group>
 
                 {panel.outputs[0] ? (
@@ -1021,7 +1132,8 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
                     }}
                   >
                     <span style={{ fontSize: 13, color: 'var(--civitai-color-text-dimmed)' }}>
-                      Generating…
+                      Generating…{elapsed ? ` ${elapsed}` : ''}
+                      {panel.cost != null ? ` · ≈${formatCost(panel.cost)} Buzz` : ''}
                     </span>
                   </div>
                 ) : (
@@ -1070,44 +1182,39 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
                     </Button>
                   </Group>
                 ) : (
+                <Stack gap="xs">
                 <Group gap="xs" wrap>
                   {panel.status === 'done' && (
                     <>
                       <Button
                         size="sm"
-                        variant="subtle"
-                        loading={exporting === panel.id}
-                        disabled={exportFlash === panel.id}
-                        onClick={() => void exportPanel(panel)}
-                      >
-                        {exportFlash === panel.id ? 'Exported ✓' : 'Export'}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="subtle"
-                        loading={publishing === panel.id}
-                        disabled={!panel.workflowId || panel.published}
-                        onClick={() => void publishPanel(panel)}
-                      >
-                        {panel.published ? 'Published ✓' : 'Publish'}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="subtle"
                         loading={posting === panel.id}
                         disabled={!panel.workflowId || panel.posted || posting !== null}
                         onClick={() => void postPanel(panel)}
                         data-testid="se-panel-post"
                       >
-                        {panel.posted ? 'Posted ✓' : 'Post'}
+                        {panel.posted ? 'Posted ✓' : 'Post to profile'}
                       </Button>
+                      {panel.posted && panel.postUrl && (
+                        <a
+                          href={panel.postUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ fontSize: 13, alignSelf: 'center' }}
+                        >
+                          View post
+                        </a>
+                      )}
                       <Button
                         size="sm"
                         variant="subtle"
                         disabled={busy}
-                        onClick={() => startPanelAction(panel.id, 'regenerate')}
+                        onClick={() =>
+                          setMenuPanelId((cur) => (cur === panel.id ? null : panel.id))
+                        }
+                        data-testid="se-panel-more"
                       >
-                        New variation
+                        {menuOpen ? 'Less' : 'More'}
                       </Button>
                     </>
                   )}
@@ -1118,15 +1225,18 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
                         disabled={busy}
                         onClick={() => startPanelAction(panel.id, 'retry')}
                       >
-                        Retry
+                        {panel.status === 'canceled' ? 'Submit again' : 'Retry'}
                       </Button>
                       <Button
                         size="sm"
                         variant="subtle"
                         disabled={busy}
-                        onClick={() => startPanelAction(panel.id, 'regenerate')}
+                        onClick={() =>
+                          setMenuPanelId((cur) => (cur === panel.id ? null : panel.id))
+                        }
+                        data-testid="se-panel-more"
                       >
-                        New variation
+                        {menuOpen ? 'Less' : 'More'}
                       </Button>
                     </>
                   )}
@@ -1141,7 +1251,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
                       Cancel
                     </Button>
                   )}
-                  {panel.status === 'queued' && !panel.workflowId && (
+                  {panel.status === 'queued' && !panel.workflowId && !batchConfirm && (
                     <Button
                       size="sm"
                       disabled={busy}
@@ -1151,6 +1261,62 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
                     </Button>
                   )}
                 </Group>
+                {menuOpen &&
+                  (panel.status === 'done' ||
+                    panel.status === 'failed' ||
+                    panel.status === 'canceled') && (
+                    <Stack gap={6}>
+                      {panel.status === 'done' && (
+                        <>
+                          <Group gap="xs" align="center" wrap>
+                            <Button
+                              size="sm"
+                              variant="subtle"
+                              loading={exporting === panel.id}
+                              disabled={exportFlash === panel.id}
+                              onClick={() => void exportPanel(panel)}
+                            >
+                              {exportFlash === panel.id ? 'Exported ✓' : 'Export'}
+                            </Button>
+                            <span style={{ fontSize: 12, opacity: 0.65 }}>
+                              Download this panel’s image
+                            </span>
+                          </Group>
+                          <Group gap="xs" align="center" wrap>
+                            <Button
+                              size="sm"
+                              variant="subtle"
+                              loading={publishing === panel.id}
+                              disabled={!panel.workflowId || panel.published}
+                              onClick={() => void publishPanel(panel)}
+                            >
+                              {panel.published ? 'Published ✓' : 'Publish'}
+                            </Button>
+                            <span style={{ fontSize: 12, opacity: 0.65 }}>
+                              List it on Civitai as a generation — Post (above)
+                              shares it to your profile instead
+                            </span>
+                          </Group>
+                        </>
+                      )}
+                      <Group gap="xs" align="center" wrap>
+                        <Button
+                          size="sm"
+                          variant="subtle"
+                          disabled={busy}
+                          onClick={() => startPanelAction(panel.id, 'regenerate')}
+                        >
+                          New variation
+                        </Button>
+                        <span style={{ fontSize: 12, opacity: 0.65 }}>
+                          {panel.status === 'done'
+                            ? 'Fresh take — new seed, same setup'
+                            : 'New seed, fresh take — the button above re-runs the same seed'}
+                        </span>
+                      </Group>
+                    </Stack>
+                  )}
+                </Stack>
                 )}
               </Stack>
             </Card>

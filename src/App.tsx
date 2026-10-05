@@ -58,6 +58,13 @@ export function App() {
   const [preselectedCharacterId, setPreselectedCharacterId] = useState<string | undefined>(
     undefined,
   );
+  // Return-trip state: when the Builder sends the viewer off to create a
+  // character/stack, saving there lands them back in the Builder with the
+  // new entry selected, instead of stranded on a list screen.
+  const [charAutoCreate, setCharAutoCreate] = useState(false);
+  const [stackAutoCreate, setStackAutoCreate] = useState(false);
+  const [returnToBuilder, setReturnToBuilder] = useState<'character' | 'stack' | null>(null);
+  const [builderStackId, setBuilderStackId] = useState<string | undefined>(undefined);
 
   const anon = ready && !viewer;
 
@@ -121,8 +128,8 @@ export function App() {
 
         {anon && (
           <Alert color="info">
-            You’re browsing as a guest — sign in when you’re ready to generate. Your
-            characters, stacks, and sheets are stored in this browser either way.
+            You’re browsing as a guest — sign in to generate. Anything you
+            create as a guest lasts only for this session.
           </Alert>
         )}
 
@@ -131,16 +138,50 @@ export function App() {
             library={library}
             onBuildSheet={goToBuilder}
             onViewSheets={viewSheetsFor}
+            autoOpenCreate={charAutoCreate}
+            onAutoOpenConsumed={() => setCharAutoCreate(false)}
+            onCreated={(id) => {
+              if (returnToBuilder !== 'character') return;
+              setReturnToBuilder(null);
+              goToBuilder(id);
+            }}
+            onCreateCancelled={() => {
+              if (returnToBuilder === 'character') setReturnToBuilder(null);
+            }}
           />
         )}
-        {tab === 'stacks' && <Stacks library={library} />}
+        {tab === 'stacks' && (
+          <Stacks
+            library={library}
+            autoOpenCreate={stackAutoCreate}
+            onAutoOpenConsumed={() => setStackAutoCreate(false)}
+            onCreated={(id) => {
+              if (returnToBuilder !== 'stack') return;
+              setReturnToBuilder(null);
+              setBuilderStackId(id);
+              setTab('builder');
+            }}
+            onCreateCancelled={() => {
+              if (returnToBuilder === 'stack') setReturnToBuilder(null);
+            }}
+          />
+        )}
         {tab === 'builder' && (
           <SheetBuilder
             library={library}
             preselectedCharacterId={preselectedCharacterId ?? null}
+            preselectedStackId={builderStackId ?? null}
             onOpenSheet={openSheet}
-            onCreateStack={() => setTab('stacks')}
-            onCreateCharacter={() => setTab('characters')}
+            onCreateStack={() => {
+              setReturnToBuilder('stack');
+              setStackAutoCreate(true);
+              setTab('stacks');
+            }}
+            onCreateCharacter={() => {
+              setReturnToBuilder('character');
+              setCharAutoCreate(true);
+              setTab('characters');
+            }}
           />
         )}
         {tab === 'sheets' &&

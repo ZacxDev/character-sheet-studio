@@ -185,8 +185,12 @@ describe('Sheet Builder panel gate + guest pricing', () => {
     expect(priceBtn).not.toBeDisabled();
   });
 
-  it('guest Price click shows sign-in guidance instead of no-op\'ing', async () => {
-    uninstall = installMockMoneyHost({ viewer: null });
+  it('guest Price button carries the sign-in ask (no duplicate notice)', async () => {
+    const outbound: { type?: string }[] = [];
+    uninstall = installMockMoneyHost({
+      viewer: null,
+      onOutbound: (m) => outbound.push(m),
+    });
     const user = userEvent.setup();
     render(
       <SheetBuilder
@@ -198,8 +202,18 @@ describe('Sheet Builder panel gate + guest pricing', () => {
       />,
     );
 
-    await user.click(await screen.findByTestId('se-builder-price'));
-    await screen.findByText(/browsing as a guest — sign in to price and generate/);
+    // The guest state lives on the button itself; clicking asks the host
+    // for sign-in, never a pricing call and never a second banner.
+    const priceBtn = await screen.findByTestId('se-builder-price');
+    expect(priceBtn).toHaveTextContent('Sign in to generate');
+    await user.click(priceBtn);
+    await waitFor(() =>
+      expect(outbound.some((m) => m.type === 'REQUEST_SIGN_IN')).toBe(true),
+    );
+    expect(outbound.some((m) => m.type === 'ESTIMATE_WORKFLOW')).toBe(false);
+    expect(
+      screen.queryByText(/sign in to price and generate/),
+    ).not.toBeInTheDocument();
   });
 
   it('guest sees a Sign in button in the app header', async () => {
@@ -363,6 +377,9 @@ describe('Sheet View priced submits + action feedback', () => {
       />,
     );
 
+    // Export / Publish now live behind the panel's "More" menu — Post is
+    // the one filled action on the card.
+    await user.click(await screen.findByTestId('se-panel-more'));
     await user.click(await screen.findByRole('button', { name: 'Export' }));
     await screen.findByRole('button', { name: 'Exported ✓' });
 
@@ -459,6 +476,7 @@ describe('Character drill-in, sheet previews, generation skeleton', () => {
                   promptModifier: 'front view',
                   seed: 42,
                   status: 'running',
+                  workflowId: 'wf-live-1',
                   outputs: [],
                   submitNonce: 1,
                 },
@@ -569,14 +587,16 @@ describe('Batch B/C leftovers', () => {
     expect(screen.queryByText('paused')).not.toBeInTheDocument();
     expect(screen.queryByText('draft')).not.toBeInTheDocument();
 
-    // Open the paused sheet — header uses the same human label.
+    // Open the paused sheet — the count in the header IS the status voice
+    // now (the duplicate header badge is gone).
     const openBtns = await screen.findAllByRole('button', { name: 'Open' });
     const pausedRow = openBtns.find((b) =>
       b.closest('[data-civitai-ui="card"]')?.textContent?.includes('Paused sheet'),
     );
     await user.click(pausedRow ?? openBtns[0]);
     await screen.findByText('Paused sheet');
-    expect(screen.getAllByText('Partially done').length).toBeGreaterThan(0);
+    expect(screen.getByText(/1\/2 panels done/)).toBeInTheDocument();
+    expect(screen.queryByText('Partially done')).not.toBeInTheDocument();
 
     // Clicking the already-active Sheets tab returns to the list.
     await user.click(screen.getByRole('tab', { name: 'Sheets' }));
@@ -617,8 +637,9 @@ describe('Batch B/C leftovers', () => {
       />,
     );
 
-    // Human label in the header, batch CTA counts the queued panels.
-    expect(await screen.findByText('Not started')).toBeInTheDocument();
+    // One status voice: the meta line counts panels; no header badge, and
+    // the completed panels speak through their images (no "Done" stamps).
+    expect(await screen.findByText(/0\/2 panels done/)).toBeInTheDocument();
     const batchBtn = await screen.findByTestId('se-submit-all');
     expect(batchBtn).toHaveTextContent('Submit all queued (2)');
 
@@ -635,9 +656,16 @@ describe('Batch B/C leftovers', () => {
     );
     // Both panels run to completion under the mock host (poll backoff).
     await waitFor(() => expect(screen.queryByTestId('se-submit-all')).not.toBeInTheDocument());
-    await waitFor(() => expect(screen.getAllByText('Done')).toHaveLength(2), {
-      timeout: 15000,
-    });
+    await waitFor(
+      () => expect(screen.getByAltText('Front view')).toBeInTheDocument(),
+      { timeout: 15000 },
+    );
+    await waitFor(
+      () => expect(screen.getByAltText('Side view')).toBeInTheDocument(),
+      { timeout: 15000 },
+    );
+    expect(screen.getByText(/2\/2 panels done/)).toBeInTheDocument();
+    expect(screen.queryByText('Done')).not.toBeInTheDocument();
   });
 
   it('stack editor: duplicate LoRA pick says so; mismatched family warns', async () => {
@@ -747,5 +775,185 @@ describe('Batch B/C leftovers', () => {
     expect(
       await screen.findByText(/keep\s+their images, labeled “Unknown stack”/),
     ).toBeInTheDocument();
+  });
+});
+
+describe('UX audit fix batch (P0/P1)', () => {
+  let uninstall: (() => void) | undefined;
+  afterEach(() => {
+    uninstall?.();
+    uninstall = undefined;
+  });
+
+  const panelFixture = (over: Record<string, unknown> = {}) => ({
+    id: 'fp1',
+    kind: 'front' as const,
+    label: 'Front view',
+    promptModifier: 'front view',
+    seed: 42,
+    status: 'queued' as const,
+    outputs: [] as string[],
+    submitNonce: 0,
+    ...over,
+  });
+
+  const sheetFixture = (panels: ReturnType<typeof panelFixture>[], over: Record<string, unknown> = {}): SheetJob =>
+    ({
+      id: 'sheet-fx',
+      name: 'Fixture sheet',
+      characterId: 'char-1',
+      stackId: 'stack-1',
+      seed: 42,
+      account: 'auto',
+      useReference: false,
+      status: 'draft',
+      panels,
+      createdAt: '2026-10-01T22:00:00.000Z',
+      updatedAt: '2026-10-01T22:00:00.000Z',
+      ...over,
+    }) as SheetJob;
+
+  it('Cancel sticks: the poll loop can never resurrect a canceled panel', async () => {
+    const outbound: { type?: string }[] = [];
+    uninstall = installMockMoneyHost({
+      pollsUntilDone: 99, // generation never finishes during this test
+      onOutbound: (m) => outbound.push(m),
+    });
+    const user = userEvent.setup();
+    render(
+      <SheetView
+        library={stubLibrary({ sheets: [sheetFixture([panelFixture()])] })}
+        sheetId="sheet-fx"
+        onBack={() => {}}
+      />,
+    );
+
+    // Price the queued panel and submit it.
+    await user.click(await screen.findByRole('button', { name: 'Submit' }));
+    await user.click(await screen.findByTestId('se-panel-confirm-submit'));
+    await screen.findByTestId('se-panel-skeleton');
+
+    // Cancel while it's generating.
+    await user.click(await screen.findByRole('button', { name: 'Cancel' }));
+    await screen.findByText('Canceled');
+    expect(
+      screen.getByRole('button', { name: 'Submit again' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId('se-panel-skeleton')).not.toBeInTheDocument();
+
+    // The mock keeps answering 'processing' for a canceled workflow — the
+    // old code snapped the panel back to "Generating…" within one poll.
+    const pollsAtCancel = outbound.filter((m) => m.type === 'POLL_WORKFLOW').length;
+    await new Promise((r) => setTimeout(r, 4600));
+    expect(outbound.filter((m) => m.type === 'POLL_WORKFLOW')).toHaveLength(
+      pollsAtCancel,
+    );
+    expect(screen.getByText('Canceled')).toBeInTheDocument();
+    expect(screen.queryByTestId('se-panel-skeleton')).not.toBeInTheDocument();
+  }, 20000);
+
+  it('a panel persisted running-without-workflow heals back to Queued', async () => {
+    uninstall = installMockMoneyHost({});
+    render(
+      <SheetView
+        library={stubLibrary({
+          sheets: [
+            sheetFixture(
+              [panelFixture({ status: 'running' })], // no workflowId — the zombie shape
+              { status: 'running' },
+            ),
+          ],
+        })}
+        sheetId="sheet-fx"
+        onBack={() => {}}
+      />,
+    );
+    // Never a running panel with no resolving action: it offers Submit.
+    expect(await screen.findByText('Queued')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Submit' })).toBeInTheDocument();
+    expect(screen.queryByTestId('se-panel-skeleton')).not.toBeInTheDocument();
+  });
+
+  it('Builder gates on hydration, then self-heals the phantom selection', async () => {
+    const outbound: { type?: string }[] = [];
+    uninstall = installMockMoneyHost({ onOutbound: (m) => outbound.push(m) });
+    const user = userEvent.setup();
+    const props = {
+      preselectedCharacterId: null,
+      onOpenSheet: () => {},
+      onCreateStack: () => {},
+      onCreateCharacter: () => {},
+    };
+    const { rerender } = render(
+      <SheetBuilder
+        library={stubLibrary({ ready: false, characters: [], stacks: [] })}
+        {...props}
+      />,
+    );
+    // Cold open: no create-first cards, no dead selects — just loading.
+    expect(screen.getByText('Loading your library…')).toBeInTheDocument();
+    expect(screen.queryByTestId('builder-create-character')).not.toBeInTheDocument();
+
+    rerender(<SheetBuilder library={stubLibrary()} {...props} />);
+    await user.click(await screen.findByTestId('se-builder-price'));
+    // The select DISPLAYED Kaida while state was '' before the fix; pricing
+    // now runs against the healed selection instead of dead-ending.
+    await waitFor(() =>
+      expect(outbound.some((m) => m.type === 'ESTIMATE_WORKFLOW')).toBe(true),
+    );
+    expect(screen.queryByText('Pick a character first.')).not.toBeInTheDocument();
+  });
+
+  it('confirm card refuses to arm Generate when the balance cannot cover it', async () => {
+    uninstall = installMockMoneyHost({
+      buzzBalance: { blue: 0, green: 0, yellow: 0 },
+    });
+    const user = userEvent.setup();
+    render(
+      <SheetBuilder
+        library={stubLibrary()}
+        preselectedCharacterId={null}
+        onOpenSheet={() => {}}
+        onCreateStack={() => {}}
+        onCreateCharacter={() => {}}
+      />,
+    );
+
+    await user.click(await screen.findByTestId('se-builder-price'));
+    // 4 default panels × 8 Buzz against a 0 balance: warned HERE, with the
+    // top-up on the card — not discovered via four failed panels later.
+    await screen.findByTestId('se-builder-insufficient');
+    const generate = screen.getByRole('button', { name: /Generate 4 panels/ });
+    expect(generate).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Top up Buzz' })).toBeInTheDocument();
+  });
+
+  it('a shared insufficient-balance failure becomes ONE sheet-level banner', async () => {
+    uninstall = installMockMoneyHost({});
+    render(
+      <SheetView
+        library={stubLibrary({
+          sheets: [
+            sheetFixture(
+              [
+                panelFixture({ id: 'fp1', status: 'failed', errorCode: 'unaffordable', workflowId: 'wf-a' }),
+                panelFixture({ id: 'fp2', kind: 'side', label: 'Side view', status: 'failed', errorCode: 'unaffordable', workflowId: 'wf-b' }),
+                panelFixture({ id: 'fp3', kind: 'back', label: 'Back view', status: 'failed', errorCode: 'generation-failed', workflowId: 'wf-c' }),
+              ],
+              { status: 'failed' },
+            ),
+          ],
+        })}
+        sheetId="sheet-fx"
+        onBack={() => {}}
+      />,
+    );
+
+    // One banner with one Top up for the shared cause; the unrelated panel
+    // failure keeps its own card; every failed panel keeps its Retry.
+    await screen.findByTestId('se-batch-insufficient');
+    expect(screen.getAllByRole('button', { name: 'Top up Buzz' })).toHaveLength(1);
+    expect(screen.queryByTestId('se-panel-top-up')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(3);
   });
 });

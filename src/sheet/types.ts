@@ -409,6 +409,14 @@ export interface SheetPanel extends PanelSpec {
   /** Set once submitted — the resumability anchor. */
   workflowId?: string;
   status: PanelStatus;
+  /**
+   * When this panel last entered `running` (ISO). Drives the elapsed-time
+   * readout; persisted so a sheet reopened mid-generation shows the true
+   * wait, not a restarted clock.
+   */
+  startedAt?: string;
+  /** The Buzz total quoted at confirm for this panel (display only). */
+  cost?: number;
   outputs: string[];
   /** App-owned failure code, never raw server prose. */
   errorCode?: string;
@@ -440,6 +448,8 @@ function normalizeSheetPanel(v: unknown): SheetPanel | null {
   const errorCode = asNonEmptyString(v.errorCode) ?? undefined;
   const enhancedPrompt = asNonEmptyString(v.enhancedPrompt) ?? undefined;
   const postUrl = asNonEmptyString(v.postUrl) ?? undefined;
+  const startedAt = asNonEmptyString(v.startedAt) ?? undefined;
+  const cost = asNumber(v.cost) ?? undefined;
   return {
     id,
     kind: v.kind,
@@ -449,6 +459,8 @@ function normalizeSheetPanel(v: unknown): SheetPanel | null {
     ...(enhancedPrompt ? { enhancedPrompt } : {}),
     ...(workflowId ? { workflowId } : {}),
     status,
+    ...(startedAt ? { startedAt } : {}),
+    ...(cost !== undefined ? { cost } : {}),
     outputs: asStringArray(v.outputs),
     ...(errorCode ? { errorCode } : {}),
     ...(v.published === true ? { published: true } : {}),

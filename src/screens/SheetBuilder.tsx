@@ -24,6 +24,7 @@ import {
   useBlockContext,
   useBlockToken,
   useBuzzBalance,
+  useBuzzPurchase,
   useBuzzWorkflow,
   useConsentUnavailable,
   useRequestConsent,
@@ -77,6 +78,8 @@ import { storeErrorMessage } from './common.js';
 export interface SheetBuilderProps {
   library: SheetLibrary;
   preselectedCharacterId: string | null;
+  /** Stack handed over by a return trip from the Stacks tab (create flow). */
+  preselectedStackId?: string | null;
   onOpenSheet: (sheetId: string) => void;
   /** Take the viewer to the Stacks tab so they can create a stack. */
   onCreateStack: () => void;
@@ -102,10 +105,11 @@ function randomSeed(): number {
   return 100000 + Math.floor(Math.random() * 900000);
 }
 
-export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onCreateStack, onCreateCharacter }: SheetBuilderProps) {
+export function SheetBuilder({ library, preselectedCharacterId, preselectedStackId, onOpenSheet, onCreateStack, onCreateCharacter }: SheetBuilderProps) {
   const { ready, viewer } = useBlockContext();
   const token = useBlockToken();
   const { balance } = useBuzzBalance();
+  const { openPurchaseModal } = useBuzzPurchase();
   const { estimate, submit, poll } = useBuzzWorkflow();
   const { requestSignIn } = useRequestSignIn();
   const { requestConsent } = useRequestConsent();
@@ -135,7 +139,7 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
   const [estimates, setEstimates] = useState<Record<string, PanelEstimate>>({});
   const [submitProgress, setSubmitProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Prompt enhancement (AI rewrite per selected panel, priced before it runs).
   const [enhancedBySpec, setEnhancedBySpec] = useState<Record<number, string>>({});
@@ -186,6 +190,27 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
   useEffect(() => {
     if (preselectedCharacterId) setCharacterId(preselectedCharacterId);
   }, [preselectedCharacterId]);
+
+  // Same for a stack handed over by a return trip (saved on the Stacks tab).
+  useEffect(() => {
+    if (preselectedStackId) setStackId(preselectedStackId);
+  }, [preselectedStackId]);
+
+  // Self-heal the selection once hydration settles: the selects' initial
+  // state was computed against an EMPTY library, so on a cold open
+  // characterId is '' while the native select DISPLAYS the first character —
+  // the price/enhance handlers then "dead-click" with "Pick a character
+  // first." Healing to a real id makes the control and the state agree.
+  useEffect(() => {
+    if (!library.ready || library.characters.length === 0) return;
+    if (library.characters.some((c) => c.id === characterId)) return;
+    const preferred =
+      preselectedCharacterId &&
+      library.characters.some((c) => c.id === preselectedCharacterId)
+        ? preselectedCharacterId
+        : library.characters[0].id;
+    setCharacterId(preferred);
+  }, [library.ready, library.characters, characterId, preselectedCharacterId]);
 
   // One-time sync of the panel selection once storage hydration settles, so a
   // saved defaultPanels preference wins over the first-render guess. The ref
@@ -372,6 +397,11 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
         } else {
           panel.workflowId = snap.workflowId;
           panel.status = 'running';
+          // Elapsed-time anchor + the quoted price, persisted so Sheet View
+          // shows the true wait and the committed Buzz across the handoff.
+          panel.startedAt = new Date().toISOString();
+          const quoted = estimates[panel.id]?.cost;
+          if (quoted != null) panel.cost = quoted;
         }
       } catch (err) {
         // Never the raw server prose — classify the rejection shape.
@@ -380,6 +410,9 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
           // Money may be committed; the poll loop learns the actual fate.
           panel.workflowId = rej.pollWorkflowId;
           panel.status = 'running';
+          panel.startedAt = new Date().toISOString();
+          const quoted = estimates[panel.id]?.cost;
+          if (quoted != null) panel.cost = quoted;
         } else if (rej.kind === 'exception') {
           panel.status = 'failed';
           panel.errorCode = 'submit-interrupted';
@@ -410,6 +443,7 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
     bodyOpts,
     characterId,
     draft,
+    estimates,
     library,
     onOpenSheet,
     stackId,
@@ -432,7 +466,6 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
 
   const startPricing = useCallback(() => {
     setError(null);
-    setNotice(null);
     // Validate BEFORE consent: asking for spend approval and only then
     // complaining about the setup burns a round-trip and (on the consent-
     // resume path) used to strand the viewer in a disabled spinner.
@@ -449,9 +482,9 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
       return;
     }
     if (anon) {
+      // The guest state lives on the button itself ("Sign in to generate" +
+      // the shell's one banner) — no second notice here.
       requestSignIn();
-      // Never a silent no-op: say what happened and what to do instead.
-      setNotice("You're browsing as a guest — sign in to price and generate.");
       return;
     }
     if (!granted) {
@@ -719,6 +752,21 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
 
   // --- render ------------------------------------------------------------------
 
+  // Gate on hydration: before `ready`, the lists are empty because they
+  // haven't LOADED, not because they're empty — showing the create-first
+  // cards (or selects that display a character the state doesn't have) is
+  // the cold-open dead end from the UX audit.
+  if (!library.ready) {
+    return (
+      <Card>
+        <Group gap="sm" align="center">
+          <Loader size="sm" />
+          <span style={{ fontSize: 14 }}>Loading your library…</span>
+        </Group>
+      </Card>
+    );
+  }
+
   if (library.characters.length === 0) {
     return (
       <Card>
@@ -765,12 +813,26 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
         ? `Balance: ${formatCost(balance.blue + balance.green + balance.yellow)} Buzz`
         : `Balance: ${formatCost(balance[account])} Buzz (${accountLabel(account)})`;
 
+  // The numeric balance the chosen pool will actually draw from — the
+  // confirm card compares the total against it and refuses to arm Generate
+  // when the wallet can't cover the sheet (learn it HERE, not from N failed
+  // panels afterwards). Unknown balance (still loading) never blocks.
+  const spendableBalance =
+    balance == null
+      ? null
+      : account === 'auto'
+        ? balance.blue + balance.green + balance.yellow
+        : balance[account];
+  const shortBy =
+    totalEstimate != null && spendableBalance != null && totalEstimate > spendableBalance
+      ? totalEstimate - spendableBalance
+      : null;
+
   return (
     <Stack gap="md">
       <h2 style={{ margin: 0, fontSize: 20 }}>Sheet Builder</h2>
 
       {error && <Alert color="error">{error}</Alert>}
-      {notice && <Alert color="info">{notice}</Alert>}
 
       {phase === 'needs-consent' && (
         <Alert color="info">
@@ -815,26 +877,58 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
                 }}
                 options={library.stacks.map((s) => ({ value: s.id, label: s.name }))}
               />
-              <NumberInput
-                label="Seed"
-                value={seed}
-                onChange={setSeed}
-                min={0}
-                style={{ width: 140 }}
-              />
-              <Select
-                label="Buzz pool"
-                value={account}
-                onChange={(v) => setAccount(v as AccountChoice)}
-                options={ACCOUNT_CHOICES.map((a) => ({ value: a, label: accountLabel(a) }))}
-              />
             </Group>
 
-            {character && (
-              <div style={{ fontSize: 13, opacity: 0.7 }}>
-                Seed policy: {character.seedPolicy === 'locked' ? 'locked — re-running reproduces the sheet' : 'varied — random per panel'}
-                {character.triggerWords.length > 0 && ` · trigger words: ${character.triggerWords.join(', ')}`}
-              </div>
+            <div>
+              <Button
+                size="sm"
+                variant="subtle"
+                onClick={() => setShowAdvanced((v) => !v)}
+                data-testid="se-builder-advanced-toggle"
+              >
+                {showAdvanced ? 'Hide advanced settings' : 'Advanced settings'}
+              </Button>
+            </div>
+
+            {showAdvanced && (
+              <Stack gap="sm">
+                <Group gap="md" align="flex-start">
+                  <div>
+                    <NumberInput
+                      label="Seed"
+                      value={seed}
+                      onChange={setSeed}
+                      min={0}
+                      style={{ width: 140 }}
+                    />
+                    <div style={{ fontSize: 12, opacity: 0.65, marginTop: 4, maxWidth: 230 }}>
+                      Same seed + same settings ≈ the same image. A fresh one
+                      is rolled for you — most people never touch this.
+                    </div>
+                  </div>
+                  <div>
+                    <Select
+                      label="Buzz pool"
+                      value={account}
+                      onChange={(v) => setAccount(v as AccountChoice)}
+                      options={ACCOUNT_CHOICES.map((a) => ({ value: a, label: accountLabel(a) }))}
+                    />
+                    <div style={{ fontSize: 12, opacity: 0.65, marginTop: 4, maxWidth: 230 }}>
+                      Which of your Buzz balances pays. “Auto” lets Civitai
+                      pick for you.
+                    </div>
+                  </div>
+                </Group>
+                {character && (
+                  <div style={{ fontSize: 13, opacity: 0.7 }}>
+                    {character.seedPolicy === 'locked'
+                      ? `Seeds are locked for ${character.name} — re-running this sheet reproduces the same panels.`
+                      : `Seeds vary for ${character.name} — every panel rolls its own.`}
+                    {character.triggerWords.length > 0 &&
+                      ` Trigger words added to every prompt: ${character.triggerWords.join(', ')}.`}
+                  </div>
+                )}
+              </Stack>
             )}
 
             <div>
@@ -973,9 +1067,11 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
                 disabled={busy || selectedSpecs.length === 0}
                 data-testid="se-builder-price"
               >
-                {selectedSpecs.length === 0
-                  ? 'Select a panel to price'
-                  : `Price ${selectedSpecs.length} panel${selectedSpecs.length === 1 ? '' : 's'}`}
+                {anon
+                  ? 'Sign in to generate'
+                  : selectedSpecs.length === 0
+                    ? 'Select a panel to price'
+                    : `Price ${selectedSpecs.length} panel${selectedSpecs.length === 1 ? '' : 's'}`}
               </Button>
             </Group>
           </Stack>
@@ -986,7 +1082,7 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
             <Stack gap="sm">
               <h3 style={{ margin: 0 }}>Confirm sheet</h3>
               <div style={{ fontSize: 14, opacity: 0.8 }}>
-                {character?.name} · {stack?.name} · {draft.panels.length} panels · seed {draft.seed}
+                {character?.name} · {stack?.name} · {draft.panels.length} panels
                 {useReference && character?.referenceImage ? ' · img2img from portrait' : ''}
               </div>
               <Stack gap="xs">
@@ -1012,6 +1108,23 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
                   {balanceText ?? ''}
                 </span>
               </Group>
+              {shortBy != null && (
+                <Alert color="warning" data-testid="se-builder-insufficient">
+                  <Group justify="space-between" align="center" wrap>
+                    <span style={{ fontSize: 14 }}>
+                      You need {formatCost(shortBy)} more Buzz to run this
+                      sheet.
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="light"
+                      onClick={() => void openPurchaseModal()}
+                    >
+                      Top up Buzz
+                    </Button>
+                  </Group>
+                </Alert>
+              )}
               <Group justify="flex-end">
                 <Button
                   variant="subtle"
@@ -1025,7 +1138,7 @@ export function SheetBuilder({ library, preselectedCharacterId, onOpenSheet, onC
                 </Button>
                 <Button
                   onClick={startConfirmedSubmit}
-                  disabled={totalEstimate == null}
+                  disabled={totalEstimate == null || shortBy != null}
                 >
                   Generate {draft.panels.length} panels · {totalEstimate != null ? `${formatCost(totalEstimate)} Buzz` : ''}
                 </Button>
