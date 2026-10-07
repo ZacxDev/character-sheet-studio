@@ -36,11 +36,14 @@ button:focus-visible {
 }
 
 /* ---------------------------------------------------------------------------
-   Character Sheet Studio theme — "Settei" (ink & red pencil).
+   Character Sheet Studio theme — "Indigo Lineup".
 
-   Named for the anime production model sheet: ink-black ground, paper-white
-   line work, red-pencil primary, blue-pencil info. The components read
-   --civitai-* tokens, so a custom theme is a token REDEFINITION scoped to
+   Sampled from the store listing media: the cover's character lineup stands
+   on a deep-indigo night (#1c0c51 field, #070121 abyss), the icon frames its
+   three-view panels in electric cyan (#00dcfc), and the figure work runs
+   pale lavender-white (#d1dae4) with steel-teal (#4e94b1). The app wears the
+   same world: indigo ground, cyan primary, steel-teal info. The components
+   read --civitai-* tokens, so the theme is a token REDEFINITION scoped to
    the app root (.css-root), not new component CSS.
    Dark is the BASE (the base rule below has no data-theme qualifier, so a
    pre-init frame paints dark, matching the boot skeleton); light exists only
@@ -50,56 +53,56 @@ button:focus-visible {
    ------------------------------------------------------------------------- */
 .css-root,
 .css-root[data-theme='dark'] {
-  --civitai-color-body: #0a0a0b;
-  --civitai-color-surface: #121214;
-  --civitai-color-surface-2: #1a1a1e;
-  --civitai-color-border: #2f2f36;
-  --civitai-color-text: #f5f2ea;
-  --civitai-color-text-dimmed: #a49f93;
-  --civitai-color-primary: #ff4a3d;
-  --civitai-color-primary-hover: #ff6152;
-  --civitai-color-primary-fg: #191410;
-  --civitai-color-primary-light: rgba(255, 74, 61, 0.15);
-  --civitai-color-info: #5ea8ff;
-  --civitai-color-success: #2fbf71;
-  --civitai-color-warning: #f59e0b;
-  --civitai-color-error: #ff3d63;
-  --civitai-color-gray-0: #faf8f2;
-  --civitai-color-gray-1: #f1eee6;
-  --civitai-color-gray-2: #e3dfd3;
-  --civitai-color-gray-3: #d0caba;
-  --civitai-color-gray-4: #b5ad9c;
-  --civitai-color-gray-5: #968e7d;
-  --civitai-color-gray-6: #797264;
-  --civitai-color-gray-7: #5c574c;
-  --civitai-color-gray-8: #403d36;
-  --civitai-color-gray-9: #26241f;
-  --civitai-color-segmented-bg: #1e1e22;
-  --civitai-color-track: #1e1e22;
-  --civitai-color-media-placeholder: #161619;
-  --civitai-radius: 0.3rem;
+  --civitai-color-body: #140734;
+  --civitai-color-surface: #1c0c51;
+  --civitai-color-surface-2: #281668;
+  --civitai-color-border: #3f2c88;
+  --civitai-color-text: #edf1fa;
+  --civitai-color-text-dimmed: #a49ed2;
+  --civitai-color-primary: #00dcfc;
+  --civitai-color-primary-hover: #45e6fc;
+  --civitai-color-primary-fg: #03222e;
+  --civitai-color-primary-light: rgba(0, 220, 252, 0.14);
+  --civitai-color-info: #62bfe8;
+  --civitai-color-success: #41d97e;
+  --civitai-color-warning: #ffb02e;
+  --civitai-color-error: #ff5964;
+  --civitai-color-gray-0: #f7f9fd;
+  --civitai-color-gray-1: #e8ecf7;
+  --civitai-color-gray-2: #d3daee;
+  --civitai-color-gray-3: #b3bee0;
+  --civitai-color-gray-4: #8f9ac6;
+  --civitai-color-gray-5: #707ba8;
+  --civitai-color-gray-6: #565f8c;
+  --civitai-color-gray-7: #414a73;
+  --civitai-color-gray-8: #2d3559;
+  --civitai-color-gray-9: #1a2142;
+  --civitai-color-segmented-bg: #281668;
+  --civitai-color-track: #281668;
+  --civitai-color-media-placeholder: #170a42;
+  --civitai-radius: 0.5rem;
   --civitai-font: 'Avenir Next', 'Segoe UI', system-ui, -apple-system, Roboto,
     Helvetica, Arial, sans-serif;
 }
 
 .css-root[data-theme='light'] {
-  --civitai-color-body: #f6f3ea;
-  --civitai-color-surface: #fffdf6;
-  --civitai-color-surface-2: #efe9da;
-  --civitai-color-border: #d9d2bf;
-  --civitai-color-text: #1a1813;
-  --civitai-color-text-dimmed: #6e685c;
-  --civitai-color-primary: #e03428;
-  --civitai-color-primary-hover: #c92a20;
+  --civitai-color-body: #eef0fb;
+  --civitai-color-surface: #ffffff;
+  --civitai-color-surface-2: #e3e7f8;
+  --civitai-color-border: #c3cdea;
+  --civitai-color-text: #1d1448;
+  --civitai-color-text-dimmed: #5e5987;
+  --civitai-color-primary: #007fa8;
+  --civitai-color-primary-hover: #00698c;
   --civitai-color-primary-fg: #ffffff;
-  --civitai-color-primary-light: rgba(224, 52, 40, 0.1);
-  --civitai-color-info: #2f7fe0;
+  --civitai-color-primary-light: rgba(0, 127, 168, 0.1);
+  --civitai-color-info: #2478b5;
   --civitai-color-success: #1d9e63;
-  --civitai-color-warning: #d97706;
-  --civitai-color-error: #e11d48;
-  --civitai-color-segmented-bg: #efe9da;
-  --civitai-color-track: #efe9da;
-  --civitai-color-media-placeholder: #eae3d0;
+  --civitai-color-warning: #cf7a06;
+  --civitai-color-error: #e02444;
+  --civitai-color-segmented-bg: #e3e7f8;
+  --civitai-color-track: #e3e7f8;
+  --civitai-color-media-placeholder: #e8ecfa;
 }
 
 /* Display type: model-sheet labels — a heavy grotesque, tight and stamped.
@@ -159,21 +162,21 @@ button:focus-visible {
   /* The shell paints its own surface: token background + text color, so the
      app reads as one coherent slab in the host frame (dark by default; the
      light tokens take over only under the host's explicit light theme).
-     The screentone dot layer is the Settei signature — faint enough that
+     The dot layer echoes the cover's starfield — faint enough that
      body text over it stays crisp. */
   background-color: var(--civitai-color-body);
   background-image: radial-gradient(
-    rgba(245, 242, 234, 0.05) 1px,
+    rgba(0, 220, 252, 0.05) 1px,
     transparent 1.4px
   );
   background-size: 9px 9px;
   color: var(--civitai-color-text);
 }
 
-/* Paper mode tones the screentone dots to ink. */
+/* Light mode tones the starfield dots to indigo ink. */
 .css-root.css-shell[data-theme='light'] {
   background-image: radial-gradient(
-    rgba(26, 24, 19, 0.055) 1px,
+    rgba(29, 20, 72, 0.055) 1px,
     transparent 1.4px
   );
 }

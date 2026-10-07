@@ -33,7 +33,7 @@ describe('App shell smoke test', () => {
       expect(screen.getByText('Character Sheet Studio')).toBeInTheDocument(),
     );
 
-    // The custom "Settei" theme scope rides on the app root.
+    // The custom "Indigo Lineup" theme scope rides on the app root.
     expect(document.querySelector('.css-root')).not.toBeNull();
     for (const tab of ['Characters', 'Stacks', 'Sheet Builder', 'Sheets']) {
       expect(screen.getByRole('tab', { name: tab })).toBeInTheDocument();
