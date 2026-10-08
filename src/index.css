@@ -36,15 +36,15 @@ button:focus-visible {
 }
 
 /* ---------------------------------------------------------------------------
-   Character Sheet Studio theme — "Indigo Lineup".
+   Character Sheet Studio theme — "Indigo Lineup", quieted.
 
-   Sampled from the store listing media: the cover's character lineup stands
-   on a deep-indigo night (#1c0c51 field, #070121 abyss), the icon frames its
-   three-view panels in electric cyan (#00dcfc), and the figure work runs
-   pale lavender-white (#d1dae4) with steel-teal (#4e94b1). The app wears the
-   same world: indigo ground, cyan primary, steel-teal info. The components
-   read --civitai-* tokens, so the theme is a token REDEFINITION scoped to
-   the app root (.css-root), not new component CSS.
+   The hue family is sampled from the store listing media (deep-indigo
+   field #1c0c51, electric-cyan frames #00dcfc, steel-teal figure work,
+   pale lavender-white #d1dae4), but the UI wears it muted: desaturated
+   slate-indigo surfaces and a softened cyan, so the artwork on the
+   listing pops harder than the chrome around the app. The components
+   read --civitai-* tokens, so the theme is a token REDEFINITION scoped
+   to the app root (.css-root), not new component CSS.
    Dark is the BASE (the base rule below has no data-theme qualifier, so a
    pre-init frame paints dark, matching the boot skeleton); light exists only
    as the explicit [data-theme='light'] override the host can request.
@@ -53,56 +53,56 @@ button:focus-visible {
    ------------------------------------------------------------------------- */
 .css-root,
 .css-root[data-theme='dark'] {
-  --civitai-color-body: #140734;
-  --civitai-color-surface: #1c0c51;
-  --civitai-color-surface-2: #281668;
-  --civitai-color-border: #3f2c88;
-  --civitai-color-text: #edf1fa;
-  --civitai-color-text-dimmed: #a49ed2;
-  --civitai-color-primary: #00dcfc;
-  --civitai-color-primary-hover: #45e6fc;
-  --civitai-color-primary-fg: #03222e;
-  --civitai-color-primary-light: rgba(0, 220, 252, 0.14);
-  --civitai-color-info: #62bfe8;
-  --civitai-color-success: #41d97e;
-  --civitai-color-warning: #ffb02e;
-  --civitai-color-error: #ff5964;
-  --civitai-color-gray-0: #f7f9fd;
-  --civitai-color-gray-1: #e8ecf7;
-  --civitai-color-gray-2: #d3daee;
-  --civitai-color-gray-3: #b3bee0;
-  --civitai-color-gray-4: #8f9ac6;
-  --civitai-color-gray-5: #707ba8;
-  --civitai-color-gray-6: #565f8c;
-  --civitai-color-gray-7: #414a73;
-  --civitai-color-gray-8: #2d3559;
-  --civitai-color-gray-9: #1a2142;
-  --civitai-color-segmented-bg: #281668;
-  --civitai-color-track: #281668;
-  --civitai-color-media-placeholder: #170a42;
+  --civitai-color-body: #0e1016;
+  --civitai-color-surface: #151824;
+  --civitai-color-surface-2: #1d2133;
+  --civitai-color-border: #2a2e44;
+  --civitai-color-text: #eceef4;
+  --civitai-color-text-dimmed: #9ba1b6;
+  --civitai-color-primary: #46b1c9;
+  --civitai-color-primary-hover: #63c0d4;
+  --civitai-color-primary-fg: #06242e;
+  --civitai-color-primary-light: rgba(70, 177, 201, 0.12);
+  --civitai-color-info: #7ba7cc;
+  --civitai-color-success: #57b87e;
+  --civitai-color-warning: #dfa244;
+  --civitai-color-error: #e26d74;
+  --civitai-color-gray-0: #f7f8fa;
+  --civitai-color-gray-1: #e9ebf1;
+  --civitai-color-gray-2: #d5d9e4;
+  --civitai-color-gray-3: #b6bccf;
+  --civitai-color-gray-4: #939bb4;
+  --civitai-color-gray-5: #747d97;
+  --civitai-color-gray-6: #5a6178;
+  --civitai-color-gray-7: #454b61;
+  --civitai-color-gray-8: #30364a;
+  --civitai-color-gray-9: #1f2334;
+  --civitai-color-segmented-bg: #1d2133;
+  --civitai-color-track: #1d2133;
+  --civitai-color-media-placeholder: #12141f;
   --civitai-radius: 0.5rem;
   --civitai-font: 'Avenir Next', 'Segoe UI', system-ui, -apple-system, Roboto,
     Helvetica, Arial, sans-serif;
 }
 
 .css-root[data-theme='light'] {
-  --civitai-color-body: #eef0fb;
+  --civitai-color-body: #f2f3f8;
   --civitai-color-surface: #ffffff;
-  --civitai-color-surface-2: #e3e7f8;
-  --civitai-color-border: #c3cdea;
-  --civitai-color-text: #1d1448;
-  --civitai-color-text-dimmed: #5e5987;
-  --civitai-color-primary: #007fa8;
-  --civitai-color-primary-hover: #00698c;
+  --civitai-color-surface-2: #e8eaf2;
+  --civitai-color-border: #d3d7e4;
+  --civitai-color-text: #1e2233;
+  --civitai-color-text-dimmed: #5f6579;
+  --civitai-color-primary: #2b87a3;
+  --civitai-color-primary-hover: #237187;
   --civitai-color-primary-fg: #ffffff;
-  --civitai-color-primary-light: rgba(0, 127, 168, 0.1);
-  --civitai-color-info: #2478b5;
-  --civitai-color-success: #1d9e63;
-  --civitai-color-warning: #cf7a06;
-  --civitai-color-error: #e02444;
-  --civitai-color-segmented-bg: #e3e7f8;
-  --civitai-color-track: #e3e7f8;
-  --civitai-color-media-placeholder: #e8ecfa;
+  --civitai-color-primary-light: rgba(43, 135, 163, 0.1);
+  --civitai-color-info: #3e74a8;
+  --civitai-color-success: #2c9464;
+  --civitai-color-warning: #c07f1d;
+  --civitai-color-error: #cf4453;
+  --civitai-color-segmented-bg: #e8eaf2;
+  --civitai-color-track: #e8eaf2;
+  --civitai-color-media-placeholder: #eceef5;
 }
 
 /* Display type: model-sheet labels — a heavy grotesque, tight and stamped.
@@ -159,26 +159,126 @@ button:focus-visible {
   width: 100%;
   box-sizing: border-box;
   padding: 16px 12px 28px;
-  /* The shell paints its own surface: token background + text color, so the
-     app reads as one coherent slab in the host frame (dark by default; the
-     light tokens take over only under the host's explicit light theme).
-     The dot layer echoes the cover's starfield — faint enough that
-     body text over it stays crisp. */
+  /* The shell is the table everything sits on: the flat body token with a
+     barely-there top light, so the raised nav + content slabs (surface)
+     and the cards inside them (surface-2) read as three distinct layers
+     instead of one flat slab. */
   background-color: var(--civitai-color-body);
-  background-image: radial-gradient(
-    rgba(0, 220, 252, 0.05) 1px,
-    transparent 1.4px
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.025),
+    transparent 260px
   );
-  background-size: 9px 9px;
   color: var(--civitai-color-text);
 }
 
-/* Light mode tones the starfield dots to indigo ink. */
 .css-root.css-shell[data-theme='light'] {
-  background-image: radial-gradient(
-    rgba(29, 20, 72, 0.055) 1px,
-    transparent 1.4px
+  background-image: linear-gradient(
+    180deg,
+    rgba(30, 34, 51, 0.03),
+    transparent 260px
   );
+}
+
+/* --- App layout: side nav + raised content slab ---------------------------
+   Body (flat) → nav/content panels (surface, soft shadow) → cards
+   (surface-2). The nav docks left on wide screens and becomes a top strip
+   on phones. */
+.css-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.css-sidenav {
+  width: 188px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  background: var(--civitai-color-surface);
+  border: 1px solid var(--civitai-color-border);
+  border-radius: 14px;
+  box-shadow:
+    0 1px 2px rgba(3, 6, 16, 0.35),
+    0 16px 40px -28px rgba(3, 6, 16, 0.6);
+}
+
+.css-nav-item {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--civitai-color-text-dimmed);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.css-nav-item:hover {
+  color: var(--civitai-color-text);
+  background: var(--civitai-color-surface-2);
+}
+
+.css-nav-item[aria-selected='true'] {
+  color: var(--civitai-color-primary);
+  background: var(--civitai-color-primary-light);
+}
+
+.css-nav-spacer {
+  flex: 1;
+}
+
+.css-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 20px;
+  background: var(--civitai-color-surface);
+  border: 1px solid var(--civitai-color-border);
+  border-radius: 14px;
+  box-shadow:
+    0 1px 2px rgba(3, 6, 16, 0.35),
+    0 16px 40px -28px rgba(3, 6, 16, 0.6);
+}
+
+/* Cards lift one more layer above the content slab. */
+.css-content [data-civitai-ui='card'] {
+  background: var(--civitai-color-surface-2);
+  box-shadow: 0 1px 3px rgba(3, 6, 16, 0.3);
+}
+
+@media (max-width: 720px) {
+  .css-layout {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .css-sidenav {
+    position: static;
+    width: 100%;
+    box-sizing: border-box;
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .css-sidenav::-webkit-scrollbar {
+    display: none;
+  }
+  .css-nav-spacer {
+    display: none;
+  }
+  .css-content {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 14px;
+  }
 }
 
 @media (min-width: 640px) {
@@ -229,32 +329,94 @@ button:focus-visible {
   align-items: start;
 }
 
-/* The header tab strip may out-width a small phone — let it scroll sideways
-   rather than crush the title or push past the viewport. `min-width: 0` is
-   load-bearing: as a flex item it would otherwise refuse to shrink below the
-   control's intrinsic width and overflow the viewport. */
-.css-tabs-scroll {
-  max-width: 100%;
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow-x: auto;
-  scrollbar-width: none;
+/* Character cards are click targets (open the character's sheets, or the
+   Builder when they have none) — signal it and lift on hover. */
+.css-char-card {
+  cursor: pointer;
+  transition: box-shadow 120ms ease, transform 120ms ease;
 }
 
-.css-tabs-scroll::-webkit-scrollbar {
-  display: none;
+.css-char-card:hover {
+  box-shadow: 0 4px 14px rgba(3, 6, 16, 0.4);
 }
 
-/* On small phones the four tabs nearly fit — compact them so the whole
-   strip is visible at a glance instead of the last tab trailing off
-   mid-word. !important: the pack's layered segment rule otherwise wins on
-   specificity, and flex-shrink:0 stops the control squashing a segment
-   (the scroller takes the overflow instead). */
-@media (max-width: 560px) {
-  .css-tabs-scroll [role='tab'] {
-    padding: 6px 10px !important;
-    font-size: 13px !important;
-    flex-shrink: 0;
-  }
+/* Hand-rolled overlays (the pack ships no Menu/Popover): the character
+   card's 3-dot menu and the seed-policy popover. */
+.css-overlay-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.css-icon-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--civitai-color-border);
+  background: var(--civitai-color-surface);
+  color: var(--civitai-color-text-dimmed);
+  cursor: pointer;
+}
+
+.css-icon-btn:hover {
+  color: var(--civitai-color-text);
+}
+
+.css-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 148px;
+  padding: 4px;
+  background: var(--civitai-color-surface);
+  border: 1px solid var(--civitai-color-border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(3, 6, 16, 0.5);
+}
+
+.css-menu-item {
+  appearance: none;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  background: transparent;
+  color: var(--civitai-color-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.css-menu-item:hover {
+  background: var(--civitai-color-surface-2);
+}
+
+.css-menu-item[data-danger='true'] {
+  color: var(--civitai-color-error);
+}
+
+.css-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  width: 240px;
+  padding: 10px 12px;
+  background: var(--civitai-color-surface);
+  border: 1px solid var(--civitai-color-border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(3, 6, 16, 0.5);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--civitai-color-text);
+  cursor: default;
 }
 

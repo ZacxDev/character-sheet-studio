@@ -1,7 +1,7 @@
 {
   "$schema": "https://civitai.com/schemas/app-block/v1.json",
   "blockId": "character-sheet-studio",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "name": "Character Sheet Studio",
   "type": "block",
   "scopes": [

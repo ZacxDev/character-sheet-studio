@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { App } from './App.js';
@@ -51,7 +51,7 @@ describe('stack picker + builder funnel', () => {
     });
     const user = userEvent.setup();
     render(<App />);
-    await screen.findByText('Character Sheet Studio');
+    await screen.findByRole('tab', { name: 'Characters' });
 
     await user.click(screen.getByRole('tab', { name: 'Stacks' }));
     await user.click(screen.getByRole('button', { name: 'New stack' }));
@@ -86,7 +86,7 @@ describe('stack picker + builder funnel', () => {
     uninstall = installMockMoneyHost({ storage: { seed } });
     const user = userEvent.setup();
     render(<App />);
-    await screen.findByText('Character Sheet Studio');
+    await screen.findByRole('tab', { name: 'Characters' });
 
     await user.click(screen.getByRole('tab', { name: 'Sheet Builder' }));
     await screen.findByTestId('builder-create-stack');
@@ -219,7 +219,7 @@ describe('Sheet Builder panel gate + guest pricing', () => {
   it('guest sees a Sign in button in the app header', async () => {
     uninstall = installMockMoneyHost({ viewer: null });
     render(<App />);
-    await screen.findByText('Character Sheet Studio');
+    await screen.findByRole('tab', { name: 'Characters' });
     expect(screen.getByTestId('se-sign-in')).toBeInTheDocument();
   });
 });
@@ -421,7 +421,7 @@ describe('Character drill-in, sheet previews, generation skeleton', () => {
     updatedAt: '2026-10-01T22:00:00.000Z',
   };
 
-  it('character card → Sheets (1) lands on the filtered list with a preview thumbnail', async () => {
+  it('character card click lands on the filtered list with a preview thumbnail', async () => {
     const seed = {
       'v1:char:char-1': {
         id: 'char-1',
@@ -439,11 +439,16 @@ describe('Character drill-in, sheet previews, generation skeleton', () => {
     uninstall = installMockMoneyHost({ storage: { seed } });
     const user = userEvent.setup();
     render(<App />);
-    await screen.findByText('Character Sheet Studio');
+    await screen.findByRole('tab', { name: 'Characters' });
 
-    const viewSheets = await screen.findByTestId('char-view-sheets');
-    expect(viewSheets).toHaveTextContent('Sheets (1)');
-    await user.click(viewSheets);
+    // The generated panel shows on the character card as a thumbnail…
+    const card = await screen.findByTestId('char-card');
+    expect(await within(card).findByTestId('char-card-thumb')).toHaveAttribute(
+      'src',
+      'https://example.com/front.png',
+    );
+    // …and clicking the card (no more Sheets button) lands on the list.
+    await user.click(card);
 
     // Filtered to Kaida, with the generated image as the card preview.
     await screen.findByText(/Sheets for/);
@@ -574,12 +579,11 @@ describe('Batch B/C leftovers', () => {
     uninstall = installMockMoneyHost({ storage: { seed } });
     const user = userEvent.setup();
     render(<App />);
-    await screen.findByText('Character Sheet Studio');
+    await screen.findByRole('tab', { name: 'Characters' });
 
-    // Drill in from the character card (2 sheets).
-    const viewSheets = await screen.findByTestId('char-view-sheets');
-    expect(viewSheets).toHaveTextContent('Sheets (2)');
-    await user.click(viewSheets);
+    // Drill in by clicking the character card (2 sheets).
+    const card = await screen.findByTestId('char-card');
+    await user.click(card);
 
     // Human labels, not raw statuses.
     expect(await screen.findByText('Partially done')).toBeInTheDocument();
@@ -764,7 +768,10 @@ describe('Batch B/C leftovers', () => {
     const { unmount } = render(
       <Characters library={library} onBuildSheet={() => {}} onViewSheets={() => {}} />,
     );
-    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    // Delete now lives in the card's 3-dot menu; picking it surfaces the
+    // confirm row (with the sheets consequence) on the card.
+    await user.click(screen.getByTestId('char-menu'));
+    await user.click(screen.getByTestId('char-menu-delete'));
     expect(
       await screen.findByText(/keep their\s+images, labeled “Unknown character”/),
     ).toBeInTheDocument();

@@ -5,12 +5,11 @@
 // (uploaded as a PRIVATE img2img source via the host), and a seed policy.
 // Everything persists through the sheet library (app storage, best-effort).
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { useImageUpload } from '@civitai/blocks-react';
 import {
   Alert,
-  Badge,
   Button,
   Card,
   Group,
@@ -51,6 +50,154 @@ function seedPolicyLabel(p: SeedPolicy): string {
   return p === 'locked' ? 'Locked (reproducible)' : 'Varied (random per panel)';
 }
 
+const SEED_POLICY_EXPLAINER: Record<SeedPolicy, string> = {
+  locked:
+    'Locked seed — every panel on a sheet reuses the same seed, so the character renders consistently and the sheet can be reproduced.',
+  varied:
+    'Varied seed — each panel rolls a fresh seed, so sheets explore more poses and looks.',
+};
+
+function LockIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <rect x="4" y="11" width="16" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
+  );
+}
+
+function ShuffleIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M16 3h5v5" />
+      <path d="M4 20 21 3" />
+      <path d="M21 16v5h-5" />
+      <path d="m15 15 6 6" />
+      <path d="M4 4l5 5" />
+    </svg>
+  );
+}
+
+function DotsIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="12" cy="5" r="1.8" />
+      <circle cx="12" cy="12" r="1.8" />
+      <circle cx="12" cy="19" r="1.8" />
+    </svg>
+  );
+}
+
+/** Closes on outside click / Escape while open. Shared by the card overlays. */
+function useOverlayClose(open: boolean, close: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close();
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open, close]);
+  return ref;
+}
+
+/** Seed policy as an icon badge; the explanation lives in a popover. */
+function SeedPolicyInfo({ policy }: { policy: SeedPolicy }) {
+  const [open, setOpen] = useState(false);
+  const ref = useOverlayClose(open, () => setOpen(false));
+  return (
+    <div className="css-overlay-wrap" ref={ref}>
+      <button
+        type="button"
+        className="css-icon-btn"
+        data-testid="char-seed-info"
+        aria-label={`Seed policy: ${seedPolicyLabel(policy)}`}
+        aria-expanded={open}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+      >
+        {policy === 'locked' ? <LockIcon /> : <ShuffleIcon />}
+      </button>
+      {open && (
+        <div className="css-popover" role="dialog" onClick={(e) => e.stopPropagation()}>
+          <strong>{seedPolicyLabel(policy)}.</strong> {SEED_POLICY_EXPLAINER[policy]}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The card's 3-dot menu: Edit / Delete live here, not as card buttons. */
+function CharacterMenu({
+  name,
+  onEdit,
+  onDelete,
+}: {
+  name: string;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useOverlayClose(open, () => setOpen(false));
+  return (
+    <div className="css-overlay-wrap" ref={ref}>
+      <button
+        type="button"
+        className="css-icon-btn"
+        data-testid="char-menu"
+        aria-label={`Actions for ${name}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+      >
+        <DotsIcon />
+      </button>
+      {open && (
+        <div className="css-menu" role="menu" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            className="css-menu-item"
+            role="menuitem"
+            data-testid="char-menu-edit"
+            onClick={() => {
+              setOpen(false);
+              onEdit();
+            }}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            className="css-menu-item"
+            role="menuitem"
+            data-danger="true"
+            data-testid="char-menu-delete"
+            onClick={() => {
+              setOpen(false);
+              onDelete();
+            }}
+          >
+            Delete
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Characters({
   library,
   onBuildSheet,
@@ -79,19 +226,37 @@ export function Characters({
       ? library.characters.find((c) => c.id === editor.id)
       : undefined;
 
-  // Sheet count per character for the "Sheets (N)" card action.
+  // Sheet count per character drives where a card click lands: no sheets
+  // yet → the Builder with this character preselected; has sheets → the
+  // Sheets tab filtered to this character.
   const sheetsByCharacter = new Map<string, number>();
   for (const s of library.sheets) {
     sheetsByCharacter.set(s.characterId, (sheetsByCharacter.get(s.characterId) ?? 0) + 1);
   }
 
-  const onDelete = async (id: string) => {
-    if (confirmDeleteId !== id) {
-      setConfirmDeleteId(id);
-      return;
+  // Generated panel images per character (newest sheet first, up to 4) —
+  // shown as a thumbnail strip so a worked-on character looks worked-on.
+  const thumbsByCharacter = new Map<string, string[]>();
+  const sortedSheets = [...library.sheets].sort((a, b) =>
+    b.updatedAt.localeCompare(a.updatedAt),
+  );
+  for (const s of sortedSheets) {
+    for (const p of s.panels) {
+      const url = p.outputs[0];
+      if (!url) continue;
+      const list = thumbsByCharacter.get(s.characterId) ?? [];
+      if (list.length < 4) list.push(url);
+      thumbsByCharacter.set(s.characterId, list);
     }
-    setConfirmDeleteId(null);
+  }
+
+  const askDelete = (id: string) => {
     setDeleteError(null);
+    setConfirmDeleteId(id);
+  };
+
+  const doDelete = async (id: string) => {
+    setConfirmDeleteId(null);
     const err = await library.deleteCharacter(id);
     if (err) setDeleteError(storeErrorMessage(err));
   };
@@ -135,87 +300,103 @@ export function Characters({
       )}
 
       <div className="css-grid-cards">
-        {library.characters.map((c) => (
-          <Card key={c.id}>
-            <Group justify="space-between" align="flex-start" wrap>
-              <div style={{ display: 'flex', gap: 12, minWidth: 0 }}>
-                {c.referenceImage && (
-                  <img
-                    src={c.referenceImage.url}
-                    alt=""
-                    width={56}
-                    height={56}
-                    style={{ borderRadius: 8, objectFit: 'cover', flexShrink: 0 }}
-                  />
-                )}
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 600 }}>{c.name}</div>
-                  {c.description && (
-                    <div
-                      style={{
-                        opacity: 0.75,
-                        fontSize: 13,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                      }}
-                    >
-                      {c.description}
-                    </div>
+        {library.characters.map((c) => {
+          const sheetCount = sheetsByCharacter.get(c.id) ?? 0;
+          const thumbs = thumbsByCharacter.get(c.id) ?? [];
+          return (
+            <Card
+              key={c.id}
+              className="css-char-card"
+              data-testid="char-card"
+              onClick={() =>
+                sheetCount > 0 ? onViewSheets(c.id) : onBuildSheet(c.id)
+              }
+            >
+              <Group justify="space-between" align="flex-start" wrap={false}>
+                <div style={{ display: 'flex', gap: 12, minWidth: 0 }}>
+                  {c.referenceImage && (
+                    <img
+                      src={c.referenceImage.url}
+                      alt=""
+                      width={56}
+                      height={56}
+                      style={{ borderRadius: 8, objectFit: 'cover', flexShrink: 0 }}
+                    />
                   )}
-                  <Group gap="xs" style={{ marginTop: 6 }}>
-                    {c.traits.slice(0, 3).map((t) => (
-                      <Badge key={t} size="sm" variant="light">
-                        {t}
-                      </Badge>
-                    ))}
-                    {c.triggerWords.length > 0 && (
-                      <Badge size="sm" variant="outline">
-                        {c.triggerWords.length} trigger word{c.triggerWords.length === 1 ? '' : 's'}
-                      </Badge>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600 }}>{c.name}</div>
+                    {c.description && (
+                      <div
+                        style={{
+                          opacity: 0.75,
+                          fontSize: 13,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                        }}
+                      >
+                        {c.description}
+                      </div>
                     )}
-                    <Badge size="sm" variant="outline">
-                      {seedPolicyLabel(c.seedPolicy)}
-                    </Badge>
+                  </div>
+                </div>
+                <Group gap="xs" wrap={false}>
+                  <SeedPolicyInfo policy={c.seedPolicy} />
+                  <CharacterMenu
+                    name={c.name}
+                    onEdit={() => setEditor({ mode: 'edit', id: c.id })}
+                    onDelete={() => askDelete(c.id)}
+                  />
+                </Group>
+              </Group>
+
+              {thumbs.length > 0 && (
+                <Group gap="xs" style={{ marginTop: 10 }}>
+                  {thumbs.map((url, i) => (
+                    <img
+                      key={`${url}-${i}`}
+                      src={url}
+                      alt=""
+                      data-testid="char-card-thumb"
+                      width={52}
+                      height={52}
+                      style={{ borderRadius: 8, objectFit: 'cover', display: 'block' }}
+                    />
+                  ))}
+                </Group>
+              )}
+
+              {confirmDeleteId === c.id && (
+                <div onClick={(e) => e.stopPropagation()}>
+                  <p style={{ margin: '10px 0 0', fontSize: 13, opacity: 0.75 }}>
+                    {sheetCount > 0
+                      ? `Deleting ${c.name} won’t delete their sheets — ${sheetCount} sheet${sheetCount === 1 ? '' : 's'} keep their images, labeled “Unknown character”.`
+                      : `Delete ${c.name}? This can’t be undone.`}
+                  </p>
+                  <Group gap="sm" style={{ marginTop: 8 }}>
+                    <Button
+                      size="sm"
+                      color="red"
+                      onClick={() => void doDelete(c.id)}
+                      data-testid="char-confirm-delete"
+                    >
+                      Confirm delete
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="subtle"
+                      onClick={() => setConfirmDeleteId(null)}
+                    >
+                      Keep
+                    </Button>
                   </Group>
                 </div>
-              </div>
-              <Group gap="xs" wrap>
-                <Button size="sm" variant="light" onClick={() => onBuildSheet(c.id)}>
-                  Build sheet
-                </Button>
-                <Button
-                  size="sm"
-                  variant="subtle"
-                  onClick={() => onViewSheets(c.id)}
-                  data-testid="char-view-sheets"
-                >
-                  Sheets ({sheetsByCharacter.get(c.id) ?? 0})
-                </Button>
-                <Button size="sm" variant="subtle" onClick={() => setEditor({ mode: 'edit', id: c.id })}>
-                  Edit
-                </Button>
-                <Button
-                  size="sm"
-                  variant="subtle"
-                  color="red"
-                  onClick={() => void onDelete(c.id)}
-                >
-                  {confirmDeleteId === c.id ? 'Confirm delete?' : 'Delete'}
-                </Button>
-              </Group>
-            </Group>
-            {confirmDeleteId === c.id && (sheetsByCharacter.get(c.id) ?? 0) > 0 && (
-              <p style={{ margin: '8px 0 0', fontSize: 13, opacity: 0.75 }}>
-                Deleting {c.name} won’t delete their sheets — {sheetsByCharacter.get(c.id)}{' '}
-                sheet{(sheetsByCharacter.get(c.id) ?? 0) === 1 ? '' : 's'} keep their
-                images, labeled “Unknown character”.
-              </p>
-            )}
-          </Card>
-        ))}
+              )}
+            </Card>
+          );
+        })}
       </div>
     </Stack>
   );

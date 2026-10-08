@@ -14,7 +14,6 @@ import {
   Button,
   Card,
   Group,
-  SegmentedControl,
   Stack,
   injectBlocksStyles,
 } from '@civitai/blocks-react/ui';
@@ -85,53 +84,57 @@ export function App() {
     setTab('sheets');
   };
 
+  const selectTab = (v: Tab) => {
+    setTab(v);
+    if (v !== 'sheets') setOpenSheetId(null);
+    // Manual navigation resets the character drill-in — the filter only
+    // exists as a target from a character card.
+    setSheetsCharFilter(null);
+  };
+
   return (
     <div ref={rootRef} className="css-root css-shell" data-theme={theme}>
-      <Stack gap="md">
-        <Group justify="space-between" align="center" wrap>
-          <h1 style={{ margin: 0, fontSize: 22 }}>Character Sheet Studio</h1>
-          <Group gap="sm" align="center" wrap style={{ minWidth: 0 }}>
-            {anon && (
-              <Button size="sm" variant="light" onClick={() => requestSignIn()} data-testid="se-sign-in">
-                Sign in
-              </Button>
-            )}
-            <div className="css-tabs-scroll">
-            <SegmentedControl
-              value={tab}
-              onChange={(v) => {
-                setTab(v as Tab);
-                if (v !== 'sheets') setOpenSheetId(null);
-                // Manual navigation resets the character drill-in — the
-                // filter only exists as a target from a character card.
-                setSheetsCharFilter(null);
-              }}
-              onClick={(e) => {
-                // Clicking the ALREADY-active Sheets tab fires no onChange,
-                // but the viewer means "back to the list" — exit the open
-                // sheet / drill-in instead of doing nothing.
-                if (tab !== 'sheets') return;
-                const t = e.target as HTMLElement;
-                const v =
-                  t.closest?.('[data-value]')?.getAttribute('data-value') ??
-                  t.closest?.('button, label')?.textContent?.trim().toLowerCase();
-                if (v === 'sheets') {
+      <div className="css-layout">
+        <nav className="css-sidenav" aria-label="App sections">
+          {TABS.map((t) => (
+            <button
+              key={t.value}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.value}
+              data-value={t.value}
+              className="css-nav-item"
+              onClick={() => {
+                // Clicking the ALREADY-active Sheets item fires no tab
+                // change, but the viewer means "back to the list" — exit
+                // the open sheet / drill-in instead of doing nothing.
+                if (tab === 'sheets' && t.value === 'sheets') {
                   setOpenSheetId(null);
                   setSheetsCharFilter(null);
+                  return;
                 }
+                selectTab(t.value);
               }}
-              data={TABS}
-            />
-            </div>
-          </Group>
-        </Group>
+            >
+              {t.label}
+            </button>
+          ))}
+          <div className="css-nav-spacer" />
+          {anon && (
+            <Button size="sm" variant="light" onClick={() => requestSignIn()} data-testid="se-sign-in">
+              Sign in
+            </Button>
+          )}
+        </nav>
 
-        {anon && (
-          <Alert color="info">
-            You’re browsing as a guest — sign in to generate. Anything you
-            create as a guest lasts only for this session.
-          </Alert>
-        )}
+        <main className="css-content">
+          <Stack gap="md">
+            {anon && (
+              <Alert color="info">
+                You’re browsing as a guest — sign in to generate. Anything you
+                create as a guest lasts only for this session.
+              </Alert>
+            )}
 
         {tab === 'characters' && (
           <Characters
@@ -200,7 +203,9 @@ export function App() {
               onClearFilter={() => setSheetsCharFilter(null)}
             />
           ))}
-      </Stack>
+          </Stack>
+        </main>
+      </div>
     </div>
   );
 }

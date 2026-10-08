@@ -24,13 +24,14 @@ function renderApp() {
 }
 
 describe('App shell smoke test', () => {
-  it('renders the title + four tabs and each tab shows its empty state', async () => {
+  it('renders the side nav + four tabs and each tab shows its empty state', async () => {
     renderApp();
     const user = userEvent.setup();
 
-    // Shell renders once BLOCK_INIT lands from the mock host.
+    // Shell renders once BLOCK_INIT lands from the mock host. There is no
+    // app title header anymore — the side nav IS the shell's identity.
     await waitFor(() =>
-      expect(screen.getByText('Character Sheet Studio')).toBeInTheDocument(),
+      expect(screen.getByRole('tab', { name: 'Characters' })).toBeInTheDocument(),
     );
 
     // The custom "Indigo Lineup" theme scope rides on the app root.
