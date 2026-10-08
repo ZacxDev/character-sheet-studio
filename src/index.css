@@ -340,6 +340,24 @@ button:focus-visible {
   box-shadow: 0 4px 14px rgba(3, 6, 16, 0.4);
 }
 
+/* Generated-panel thumbnails: a full-bleed strip across the card, each
+   thumb flexing to share the width (bigger than a fixed 52px chip, and
+   still square at any card width). */
+.css-char-thumbs {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.css-char-thumbs img {
+  flex: 1 1 0;
+  min-width: 0;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 10px;
+  display: block;
+}
+
 /* Hand-rolled overlays (the pack ships no Menu/Popover): the character
    card's 3-dot menu and the seed-policy popover. */
 .css-overlay-wrap {

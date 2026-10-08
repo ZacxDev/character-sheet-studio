@@ -353,19 +353,16 @@ export function Characters({
               </Group>
 
               {thumbs.length > 0 && (
-                <Group gap="xs" style={{ marginTop: 10 }}>
+                <div className="css-char-thumbs">
                   {thumbs.map((url, i) => (
                     <img
                       key={`${url}-${i}`}
                       src={url}
                       alt=""
                       data-testid="char-card-thumb"
-                      width={52}
-                      height={52}
-                      style={{ borderRadius: 8, objectFit: 'cover', display: 'block' }}
                     />
                   ))}
-                </Group>
+                </div>
               )}
 
               {confirmDeleteId === c.id && (
