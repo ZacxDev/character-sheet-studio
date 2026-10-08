@@ -234,8 +234,9 @@ export function Characters({
     sheetsByCharacter.set(s.characterId, (sheetsByCharacter.get(s.characterId) ?? 0) + 1);
   }
 
-  // Generated panel images per character (newest sheet first, up to 4) —
-  // shown as a thumbnail strip so a worked-on character looks worked-on.
+  // Generated panel images per character (newest sheet first, up to 8 —
+  // the carousel shows them at a fixed size, so more is fine) — a strip
+  // of thumbs makes a worked-on character look worked-on.
   const thumbsByCharacter = new Map<string, string[]>();
   const sortedSheets = [...library.sheets].sort((a, b) =>
     b.updatedAt.localeCompare(a.updatedAt),
@@ -245,7 +246,7 @@ export function Characters({
       const url = p.outputs[0];
       if (!url) continue;
       const list = thumbsByCharacter.get(s.characterId) ?? [];
-      if (list.length < 4) list.push(url);
+      if (list.length < 8) list.push(url);
       thumbsByCharacter.set(s.characterId, list);
     }
   }

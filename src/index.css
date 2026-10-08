@@ -340,22 +340,31 @@ button:focus-visible {
   box-shadow: 0 4px 14px rgba(3, 6, 16, 0.4);
 }
 
-/* Generated-panel thumbnails: a full-bleed strip across the card, each
-   thumb flexing to share the width (bigger than a fixed 52px chip, and
-   still square at any card width). */
+/* Generated-panel thumbnails: a fixed-size carousel strip. Every thumb is
+   the same 132px square whether the character has one generation or eight
+   — the row scrolls sideways instead of shrinking the images to fit. */
 .css-char-thumbs {
   display: flex;
   gap: 8px;
   margin-top: 12px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+
+.css-char-thumbs::-webkit-scrollbar {
+  display: none;
 }
 
 .css-char-thumbs img {
-  flex: 1 1 0;
-  min-width: 0;
-  aspect-ratio: 1;
+  flex: 0 0 auto;
+  width: 132px;
+  height: 132px;
   object-fit: cover;
   border-radius: 10px;
   display: block;
+  scroll-snap-align: start;
 }
 
 /* Hand-rolled overlays (the pack ships no Menu/Popover): the character
