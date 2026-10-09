@@ -28,6 +28,7 @@ import type {
 import { newCharacter } from '../sheet/types.js';
 import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
 import { parseListInput, storeErrorMessage } from './common.js';
+import { randomCharacter, randomName } from './random-character.js';
 
 export interface CharactersProps {
   library: SheetLibrary;
@@ -84,6 +85,18 @@ function DotsIcon() {
       <circle cx="12" cy="5" r="1.8" />
       <circle cx="12" cy="12" r="1.8" />
       <circle cx="12" cy="19" r="1.8" />
+    </svg>
+  );
+}
+
+function DiceIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <rect x="3" y="3" width="18" height="18" rx="4" />
+      <circle cx="8.5" cy="8.5" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="15.5" cy="15.5" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="15.5" cy="8.5" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="8.5" cy="15.5" r="1.3" fill="currentColor" stroke="none" />
     </svg>
   );
 }
@@ -423,6 +436,35 @@ function CharacterEditor({ initial, stacks, onClose, onSaved, saveCharacter }: E
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
+  const [confirmRandomize, setConfirmRandomize] = useState(false);
+
+  const isCreate = !initial;
+
+  /** Fields a randomize would overwrite — everything except the name. */
+  const formDirty =
+    description.trim() !== '' ||
+    traits.trim() !== '' ||
+    triggerWords.trim() !== '' ||
+    negativePrompt.trim() !== '';
+
+  const applyRandomize = () => {
+    const rc = randomCharacter();
+    setName(rc.name);
+    setDescription(rc.description);
+    setTraits(rc.traits.join(', '));
+    setTriggerWords(rc.triggerWord);
+    setConfirmRandomize(false);
+  };
+
+  const onRandomize = () => {
+    // Overwriting typed work is a decision, not a side effect: when any
+    // non-name field already has input, ask first; otherwise just roll.
+    if (formDirty && !confirmRandomize) {
+      setConfirmRandomize(true);
+      return;
+    }
+    applyRandomize();
+  };
 
   // PRIVATE img2img source: unscanned, never displayed publicly by the host —
   // the url feeds straight into a workflow body's sourceImages.
@@ -486,21 +528,76 @@ function CharacterEditor({ initial, stacks, onClose, onSaved, saveCharacter }: E
       <Stack gap="sm">
         <Group justify="space-between" align="center">
           <h3 style={{ margin: 0 }}>{initial ? 'Edit character' : 'New character'}</h3>
-          <Button size="sm" variant="subtle" onClick={onClose}>
-            Cancel
-          </Button>
+          <Group gap="sm">
+            <Button
+              size="sm"
+              variant="light"
+              onClick={onRandomize}
+              data-testid="char-randomize"
+            >
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <DiceIcon /> Randomize
+              </span>
+            </Button>
+            <Button size="sm" variant="subtle" onClick={onClose}>
+              Cancel
+            </Button>
+          </Group>
         </Group>
+
+        {confirmRandomize && (
+          <Alert color="warning">
+            <Group justify="space-between" align="center" wrap>
+              <span>
+                Replace the description, traits, and trigger words you’ve
+                typed with a random character?
+              </span>
+              <Group gap="sm">
+                <Button
+                  size="sm"
+                  onClick={applyRandomize}
+                  data-testid="char-randomize-confirm"
+                >
+                  Replace fields
+                </Button>
+                <Button
+                  size="sm"
+                  variant="subtle"
+                  onClick={() => setConfirmRandomize(false)}
+                >
+                  Keep mine
+                </Button>
+              </Group>
+            </Group>
+          </Alert>
+        )}
 
         {error && <Alert color="error">{error}</Alert>}
 
-        <TextInput
-          label="Name"
-          placeholder="Nyx"
-          value={name}
-          onChange={(e) => setName(e.currentTarget.value)}
-          error={nameError}
-          data-testid="char-name"
-        />
+        <Group gap="xs" align="flex-end" wrap={false}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <TextInput
+              label="Name"
+              placeholder="Nyx"
+              value={name}
+              onChange={(e) => setName(e.currentTarget.value)}
+              error={nameError}
+              data-testid="char-name"
+            />
+          </div>
+          {isCreate && (
+            <button
+              type="button"
+              className="css-icon-btn"
+              style={{ width: 34, height: 34 }}
+              aria-label="Random name"
+              data-testid="char-name-dice"
+              onClick={() => setName(randomName())}
+            >
+              <DiceIcon />
+            </button>
+          )}
+        </Group>
         <Textarea
           label="Description"
           placeholder="a cyberpunk fox mercenary, lean build, …"
@@ -533,15 +630,26 @@ function CharacterEditor({ initial, stacks, onClose, onSaved, saveCharacter }: E
         />
 
         <Group gap="md" align="flex-end">
-          <Select
-            label="Seed policy"
-            value={seedPolicy}
-            onChange={(v) => setSeedPolicy(v as SeedPolicy)}
-            options={[
-              { value: 'locked', label: 'Locked (reproducible)' },
-              { value: 'varied', label: 'Varied (random per panel)' },
-            ]}
-          />
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>
+              Seed policy
+            </div>
+            <Button
+              variant="light"
+              role="switch"
+              aria-checked={seedPolicy === 'locked'}
+              aria-label="Seed policy"
+              data-testid="char-seed-toggle"
+              onClick={() =>
+                setSeedPolicy((p) => (p === 'locked' ? 'varied' : 'locked'))
+              }
+            >
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                {seedPolicy === 'locked' ? <LockIcon /> : <ShuffleIcon />}
+                {seedPolicyLabel(seedPolicy)}
+              </span>
+            </Button>
+          </div>
           <Select
             label="Default stack"
             value={defaultStackId}

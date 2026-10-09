@@ -964,3 +964,78 @@ describe('UX audit fix batch (P0/P1)', () => {
     expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(3);
   });
 });
+
+describe('Character form randomizer + seed toggle', () => {
+  const renderCharacters = () =>
+    render(
+      <Characters
+        library={stubLibrary({ characters: [demoChar] })}
+        onBuildSheet={() => {}}
+        onViewSheets={() => {}}
+      />,
+    );
+
+  const field = (label: string) =>
+    screen.getByLabelText(label, { exact: false }) as HTMLInputElement | HTMLTextAreaElement;
+
+  it('name dice appears in create mode only and fills the name', async () => {
+    const user = userEvent.setup();
+    renderCharacters();
+
+    await user.click(screen.getByRole('button', { name: 'New character' }));
+    const nameInput = screen.getByTestId('char-name') as HTMLInputElement;
+    expect(nameInput.value).toBe('');
+    await user.click(screen.getByTestId('char-name-dice'));
+    expect(nameInput.value).not.toBe('');
+
+    // Edit mode: no dice (the name is the character's identity already).
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await user.click(screen.getByTestId('char-menu'));
+    await user.click(screen.getByTestId('char-menu-edit'));
+    expect(screen.queryByTestId('char-name-dice')).not.toBeInTheDocument();
+  });
+
+  it('randomize fills a clean form in one click', async () => {
+    const user = userEvent.setup();
+    renderCharacters();
+    await user.click(screen.getByRole('button', { name: 'New character' }));
+    await user.click(screen.getByTestId('char-randomize'));
+
+    expect((screen.getByTestId('char-name') as HTMLInputElement).value).not.toBe('');
+    expect(field('Description').value).toMatch(/^an? /);
+    expect(field('Traits').value).not.toBe('');
+    expect(field('Trigger words').value).not.toBe('');
+    // No confirm was needed — nothing of the user's was overwritten.
+    expect(screen.queryByTestId('char-randomize-confirm')).not.toBeInTheDocument();
+  });
+
+  it('randomize asks before replacing typed fields', async () => {
+    const user = userEvent.setup();
+    renderCharacters();
+    await user.click(screen.getByRole('button', { name: 'New character' }));
+    await user.type(field('Description'), 'my own concept');
+
+    await user.click(screen.getByTestId('char-randomize'));
+    // Confirm shows and nothing has changed yet.
+    expect(await screen.findByTestId('char-randomize-confirm')).toBeInTheDocument();
+    expect(field('Description').value).toBe('my own concept');
+
+    await user.click(screen.getByTestId('char-randomize-confirm'));
+    expect(field('Description').value).toMatch(/^an? /);
+    expect((screen.getByTestId('char-name') as HTMLInputElement).value).not.toBe('');
+  });
+
+  it('seed policy is a toggle switch, not a select', async () => {
+    const user = userEvent.setup();
+    renderCharacters();
+    await user.click(screen.getByRole('button', { name: 'New character' }));
+
+    const toggle = screen.getByTestId('char-seed-toggle');
+    expect(toggle).toHaveAttribute('role', 'switch');
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
+    expect(toggle).toHaveTextContent('Locked');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    expect(toggle).toHaveTextContent('Varied');
+  });
+});
