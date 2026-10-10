@@ -1382,16 +1382,17 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
               )}
             </div>
 
-            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 14, cursor: character?.referenceImage ? 'pointer' : 'default', opacity: character?.referenceImage ? 1 : 0.5 }}>
-              <input
-                type="checkbox"
-                checked={useReference}
-                disabled={busy || !character?.referenceImage}
-                onChange={(e) => setUseReference(e.target.checked)}
-              />
-              Use reference portrait as img2img source
-              {!character?.referenceImage && ' (no portrait on this character)'}
-            </label>
+            {character?.referenceImage && (
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 14, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={useReference}
+                  disabled={busy}
+                  onChange={(e) => setUseReference(e.target.checked)}
+                />
+                Use reference portrait as img2img source
+              </label>
+            )}
 
             {phase === 'estimating' && (
               <Group gap="sm" align="center">

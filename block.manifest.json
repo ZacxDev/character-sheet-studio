@@ -1,7 +1,7 @@
 {
   "$schema": "https://civitai.com/schemas/app-block/v1.json",
   "blockId": "character-sheet-studio",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "name": "Character Sheet Studio",
   "tagline": "Build a full character sheet in one batch — front, side, back, expressions and poses, priced before you generate.",
   "description": "Character Sheet Studio turns one character into a complete model sheet. Define the character once (description, traits, trigger words, an optional reference portrait), pair them with a model + LoRA stack, then generate the panels a sheet needs — front, side, back, three-quarter, expressions, poses, details — as one batch. Every run is priced in Buzz before anything is submitted, sheets resume if you leave mid-run, and any finished panel can be posted straight to your Civitai profile. Characters, stacks, and sheets persist in your private library.",
