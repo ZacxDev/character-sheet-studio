@@ -69,13 +69,22 @@ function stubLibrary(over: Partial<SheetLibrary> = {}): SheetLibrary {
 
 type Outbound = { type?: string; payload?: unknown };
 
-/** Leave exactly one panel (the first) checked in the Builder. */
-async function keepOnePanel(user: ReturnType<typeof userEvent.setup>) {
-  const boxes = screen
-    .getAllByRole('checkbox')
-    .filter((b) => !(b as HTMLInputElement).disabled) as HTMLInputElement[];
-  const checked = boxes.filter((b) => b.checked);
-  for (const box of checked.slice(1)) await user.click(box);
+/** Unselect every default panel card, leaving none picked. */
+async function unselectAllPanels(user: ReturnType<typeof userEvent.setup>) {
+  for (const card of screen.getAllByTestId('builder-panel-card')) {
+    if (card.dataset.selected === 'true') await user.click(card);
+  }
+}
+
+/** Open the custom-panel editor and write a panel (label + prompt). */
+async function writeCustomPanel(
+  user: ReturnType<typeof userEvent.setup>,
+  label: string,
+  prompt: string,
+) {
+  await user.click(screen.getByTestId('builder-panel-new'));
+  await user.type(screen.getByTestId('builder-panel-label'), label);
+  await user.type(screen.getByTestId('builder-panel-prompt'), prompt);
 }
 
 describe('Builder prompt enhancement', () => {
@@ -111,8 +120,10 @@ describe('Builder prompt enhancement', () => {
         onCreateCharacter={() => {}}
       />,
     );
-    await keepOnePanel(user);
+    await unselectAllPanels(user);
+    await writeCustomPanel(user, 'Sky whale ride', 'riding a sky-whale at dawn');
 
+    // The Enhance button exists only here, inside the panel editor.
     // Price the enhancement first — nothing submits before the confirm.
     await user.click(await screen.findByTestId('se-enhance'));
     const confirm = await screen.findByTestId('se-enhance-confirm');
@@ -148,8 +159,11 @@ describe('Builder prompt enhancement', () => {
     expect(stepBody?.params?.model).toBe('openai/gpt-4o-mini');
     expect(stepBody?.params?.messages?.[1]?.content).toContain('kaida_cyber');
 
-    // Price + generate: the textToImage submit must carry the enhanced text
-    // verbatim — the composer does not re-compose around it.
+    // Save the panel, then price + generate: the textToImage submit must
+    // carry the enhanced text verbatim — the composer does not re-compose
+    // around it.
+    await user.click(screen.getByTestId('builder-panel-add'));
+    expect(await screen.findByTestId('builder-panel-custom')).toBeInTheDocument();
     await user.click(screen.getByTestId('se-builder-price'));
     await user.click(await screen.findByRole('button', { name: /Generate 1 panel/ }));
     await waitFor(() => expect(onOpenSheet).toHaveBeenCalled(), { timeout: 15_000 });
@@ -184,7 +198,8 @@ describe('Builder prompt enhancement', () => {
         onCreateCharacter={() => {}}
       />,
     );
-    await keepOnePanel(user);
+    await unselectAllPanels(user);
+    await writeCustomPanel(user, 'Sky whale ride', 'riding a sky-whale at dawn');
 
     await user.click(await screen.findByTestId('se-enhance'));
     await user.click(await screen.findByTestId('se-enhance-confirm-run'));

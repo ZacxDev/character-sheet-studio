@@ -258,16 +258,18 @@ export function Stacks({
 
 // ---------------------------------------------------------------------------
 
-interface EditorProps {
+export interface StackEditorProps {
   initial?: ModelStack;
+  /** Create-mode starting values (a preset picked above the editor). */
+  preset?: { name: string; notes: string };
   onClose: () => void;
   onSaved: (saved: ModelStack) => void;
   saveStack: SheetLibrary['saveStack'];
 }
 
-function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
-  const [name, setName] = useState(initial?.name ?? '');
-  const [notes, setNotes] = useState(initial?.notes ?? '');
+export function StackEditor({ initial, preset, onClose, onSaved, saveStack }: StackEditorProps) {
+  const [name, setName] = useState(initial?.name ?? preset?.name ?? '');
+  const [notes, setNotes] = useState(initial?.notes ?? preset?.notes ?? '');
   const [checkpoint, setCheckpoint] = useState<StackCheckpoint>(
     initial?.checkpoint ?? defaultCheckpoint(),
   );

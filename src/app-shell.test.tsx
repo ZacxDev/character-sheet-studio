@@ -72,8 +72,9 @@ describe('App shell smoke test', () => {
       await user.click(screen.getByTestId('char-step-next'));
     }
     await user.click(screen.getByTestId('char-save'));
-    // Back in the Builder — which now funnels to the next missing piece.
-    await screen.findByTestId('builder-create-stack');
+    // Back in the Builder — zero stacks means the inline stack create is
+    // open, ready for the first stack.
+    await screen.findByTestId('stack-name');
 
     // Sheets page.
     await user.click(screen.getByRole('button', { name: 'Sheets' }));

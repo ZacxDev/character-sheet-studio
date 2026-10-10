@@ -1,7 +1,9 @@
 // Sheet Builder: configure a sheet, price every panel, confirm once, submit.
 //
 // The batch money path, in order:
-//   1. setup      — character + stack + panels + seed (+ optional img2img)
+//   1. setup      — character + stack (picked from full-detail cards, or a
+//                   new stack created inline) + panels (icon cards, plus
+//                   custom panels written inline) + seed (+ optional img2img)
 //   2. consent    — BEFORE pricing when the budgeted scope is missing (the
 //                   production host scope-gates estimate itself)
 //   3. estimate   — EVERY panel priced; the batch total is the single confirm gate.
@@ -13,6 +15,10 @@
 //                   lost response reuses the key → one charge, not two)
 //   6. handoff    — the sheet persists after EVERY panel transition, then the
 //                   Sheet View takes over polling.
+//
+// Prompt enhancement lives ONLY in the custom-panel editor: when a viewer
+// writes their own panel, AI can rewrite it — priced first, like everything
+// else. The enhanced text stores on the panel; the composer uses it verbatim.
 //
 // The sheet is persisted only once it becomes real (first submit). The
 // estimate/confirm draft lives in memory — closing the tab at the confirm
@@ -40,6 +46,8 @@ import {
   NumberInput,
   Select,
   Stack,
+  TextInput,
+  Textarea,
 } from '@civitai/blocks-react/ui';
 import type { BlockWorkflowSnapshot, WorkflowBody } from '@civitai/app-sdk/blocks';
 
@@ -70,10 +78,12 @@ import {
   resolvePanelSeed,
   type PanelErrorCode,
 } from '../sheet/batch.js';
-import type { PanelSpec, SheetJob } from '../sheet/types.js';
-import { defaultPanelSpecs, newSheetJob } from '../sheet/types.js';
+import type { ModelStack, PanelKind, PanelSpec, SheetJob, SheetPanel } from '../sheet/types.js';
+import { PANEL_KINDS, PANEL_LABELS, defaultPanelSpecs, newSheetJob } from '../sheet/types.js';
+import { checkpointDisplayLabel } from '../models.js';
 import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
 import { storeErrorMessage } from './common.js';
+import { StackEditor } from './Stacks.js';
 
 export interface SheetBuilderProps {
   library: SheetLibrary;
@@ -101,11 +111,98 @@ interface PanelEstimate {
   errorBody?: string;
 }
 
+/** A panel the viewer wrote inline (any base kind, own label + wording). */
+interface CustomPanelDraft extends PanelSpec {
+  id: string;
+  selected: boolean;
+  enhancedPrompt?: string;
+}
+
+type ChosenSpec = PanelSpec & { enhancedPrompt?: string };
+
+const STACK_PRESETS: Array<{ slug: string; label: string; name: string; notes: string }> = [
+  { slug: 'anime', label: 'Anime sheet', name: 'Anime Sheet', notes: 'Clean anime look for character turnarounds.' },
+  { slug: 'realistic', label: 'Realistic', name: 'Realistic Portrait', notes: 'Photoreal skin, natural light.' },
+  { slug: 'illustration', label: 'Illustration', name: 'Illustration', notes: 'Painterly, hand-drawn feel.' },
+  { slug: 'chibi', label: 'Chibi & cute', name: 'Chibi & Cute', notes: 'Chibi proportions, bright colors.' },
+];
+
 function randomSeed(): number {
   return 100000 + Math.floor(Math.random() * 900000);
 }
 
-export function SheetBuilder({ library, preselectedCharacterId, preselectedStackId, onOpenSheet, onCreateStack, onCreateCharacter }: SheetBuilderProps) {
+function newPanelId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `cp-${Date.now()}-${Math.random()}`;
+}
+
+/** Little line icons that picture what each panel kind frames. */
+export function PanelKindIcon({ kind }: { kind: PanelKind }) {
+  const common = {
+    width: 26,
+    height: 26,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.7,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true,
+  };
+  switch (kind) {
+    case 'front':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="8" r="3.4" />
+          <circle cx="10.9" cy="7.8" r="0.4" fill="currentColor" />
+          <circle cx="13.1" cy="7.8" r="0.4" fill="currentColor" />
+          <path d="M5.5 20c.8-3.2 3.4-4.8 6.5-4.8s5.7 1.6 6.5 4.8" />
+        </svg>
+      );
+    case 'side':
+      return (
+        <svg {...common}>
+          <path d="M14.5 4.2a5 5 0 1 1-3.4 8.7l-1.6 2.1h4.2" />
+          <path d="M11.5 20c.4-2.6 1.6-4.2 3.5-5" />
+        </svg>
+      );
+    case 'back':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="8" r="3.4" />
+          <path d="M8.9 6.4c1-1 5.2-1 6.2 0M9.3 9.8c.8.6 4.6.6 5.4 0" />
+          <path d="M5.5 20c.8-3.2 3.4-4.8 6.5-4.8s5.7 1.6 6.5 4.8" />
+        </svg>
+      );
+    case 'three-quarter':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="8" r="3.4" />
+          <circle cx="13.2" cy="7.8" r="0.4" fill="currentColor" />
+          <path d="M15.2 5.2a4.6 4.6 0 0 1 0 5.6" />
+          <path d="M5.5 20c.8-3.2 3.4-4.8 6.5-4.8s5.7 1.6 6.5 4.8" />
+        </svg>
+      );
+    case 'expression':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="7.5" />
+          <circle cx="9.3" cy="10.4" r="0.5" fill="currentColor" />
+          <circle cx="14.7" cy="10.4" r="0.5" fill="currentColor" />
+          <path d="M8.6 14.2c1 1.5 2.1 2.2 3.4 2.2s2.4-.7 3.4-2.2" />
+        </svg>
+      );
+    case 'scenario':
+      return (
+        <svg {...common}>
+          <rect x="3.5" y="5" width="17" height="14" rx="2" />
+          <circle cx="9" cy="10" r="1.4" />
+          <path d="M4 17.5 9.5 12l3.5 3.2 3-2.7 4 5" />
+        </svg>
+      );
+  }
+}
+
+export function SheetBuilder({ library, preselectedCharacterId, preselectedStackId, onOpenSheet, onCreateCharacter }: SheetBuilderProps) {
   const { ready, viewer } = useBlockContext();
   const token = useBlockToken();
   const { balance } = useBuzzBalance();
@@ -130,6 +227,7 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
   const [specSelected, setSpecSelected] = useState<boolean[]>(() =>
     allSpecs.map((s) => library.settings.defaultPanels.includes(s.kind)),
   );
+  const [customPanels, setCustomPanels] = useState<CustomPanelDraft[]>([]);
   const [seed, setSeed] = useState<number | null>(() => randomSeed());
   const [useReference, setUseReference] = useState(false);
   const [account, setAccount] = useState<AccountChoice>('auto');
@@ -141,19 +239,25 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
   const [error, setError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  // Prompt enhancement (AI rewrite per selected panel, priced before it runs).
-  const [enhancedBySpec, setEnhancedBySpec] = useState<Record<number, string>>({});
-  const [enhancePhase, setEnhancePhase] = useState<
-    'idle' | 'estimating' | 'confirming' | 'running'
-  >('idle');
-  const [enhanceQuote, setEnhanceQuote] = useState<{
-    total: number;
-    specIndexes: number[];
+  // Inline stack creation (with preset starting points).
+  const [stackCreateOpen, setStackCreateOpen] = useState(false);
+  const [stackPreset, setStackPreset] = useState<{ name: string; notes: string } | null>(null);
+
+  // Custom-panel editor. Enhancement lives here, nowhere else: it exists to
+  // polish a panel the viewer is writing themselves.
+  const [panelEditor, setPanelEditor] = useState<{
+    id?: string;
+    label: string;
+    kind: PanelKind;
+    prompt: string;
+    enhancedPrompt?: string;
   } | null>(null);
-  const [enhanceNotice, setEnhanceNotice] = useState<string | null>(null);
-  const [enhanceConsentWait, setEnhanceConsentWait] = useState(false);
-  const enhanceIntentRef = useRef(false);
-  const enhanceRunRef = useRef(0);
+  const [cpPhase, setCpPhase] = useState<'idle' | 'estimating' | 'confirming' | 'running'>('idle');
+  const [cpQuote, setCpQuote] = useState<number | null>(null);
+  const [cpNotice, setCpNotice] = useState<string | null>(null);
+  const [cpConsentWait, setCpConsentWait] = useState(false);
+  const cpIntentRef = useRef(false);
+  const cpRunRef = useRef(0);
   const pollCancelsRef = useRef<Array<() => void>>([]);
   const pollRef = useRef(poll);
   pollRef.current = poll;
@@ -171,6 +275,12 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
 
   const character = library.characters.find((c) => c.id === characterId);
   const stack = library.stacks.find((s) => s.id === stackId);
+
+  // With no stacks at all, the inline create starts open — creating the first
+  // stack is the flow, not a detour to another tab.
+  useEffect(() => {
+    if (library.ready && library.stacks.length === 0) setStackCreateOpen(true);
+  }, [library.ready, library.stacks.length]);
 
   // Character and stack are independent choices for this run. Heal the stack
   // selection only when it is empty or points at a deleted stack; switching
@@ -220,10 +330,19 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
     }
   }, [library.ready, library.settings, allSpecs]);
 
-  const selectedSpecs: PanelSpec[] = useMemo(
-    () => allSpecs.filter((_, i) => specSelected[i]),
-    [allSpecs, specSelected],
-  );
+  /** Everything that would generate: picked defaults + picked custom panels. */
+  const chosenSpecs: ChosenSpec[] = useMemo(() => {
+    const defaults = allSpecs.filter((_, i) => specSelected[i]);
+    const customs = customPanels
+      .filter((p) => p.selected)
+      .map((p) => ({
+        kind: p.kind,
+        label: p.label,
+        promptModifier: p.promptModifier,
+        ...(p.enhancedPrompt ? { enhancedPrompt: p.enhancedPrompt } : {}),
+      }));
+    return [...defaults, ...customs];
+  }, [allSpecs, customPanels, specSelected]);
 
   const totalEstimate = useMemo(() => {
     let total = 0;
@@ -262,11 +381,11 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
       return;
     }
     if (!s) {
-      setError('Pick a stack first — create one on the Stacks screen.');
+      setError('Pick or create a stack first.');
       setPhase('idle');
       return;
     }
-    const specs = allSpecs.filter((_, i) => specSelected[i]);
+    const specs = chosenSpecs;
     if (specs.length === 0) {
       setError('Select at least one panel.');
       setPhase('idle');
@@ -286,16 +405,13 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
       account,
       useReference,
     });
-    const selectedIdx = allSpecs
-      .map((_, i) => i)
-      .filter((i) => specSelected[i]);
     job.panels = job.panels.map((p, i) => ({
       ...p,
       seed: resolvePanelSeed(seedVal, i, c.seedPolicy),
-      // AI-enhanced prompts (if the viewer enhanced before pricing) ride the
-      // panel into the sheet — the composer then uses them verbatim.
-      ...(enhancedBySpec[selectedIdx[i]]
-        ? { enhancedPrompt: enhancedBySpec[selectedIdx[i]] }
+      // AI-enhanced prompts ride the panel into the sheet — the composer
+      // then uses them verbatim.
+      ...(specs[i]?.enhancedPrompt
+        ? { enhancedPrompt: specs[i].enhancedPrompt }
         : {}),
     }));
 
@@ -342,16 +458,14 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
     setPhase('confirm');
   }, [
     account,
-    allSpecs,
     bodyOpts,
     characterId,
-    enhancedBySpec,
+    chosenSpecs,
     estimate,
     library.characters,
     library.settings,
     library.stacks,
     seed,
-    specSelected,
     stackId,
   ]);
   runEstimateRef.current = runEstimate;
@@ -471,10 +585,10 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
       return;
     }
     if (!stackId) {
-      setError('Pick a stack first — create one on the Stacks screen.');
+      setError('Pick or create a stack first.');
       return;
     }
-    if (selectedSpecs.length === 0) {
+    if (chosenSpecs.length === 0) {
       setError('Select at least one panel.');
       return;
     }
@@ -494,10 +608,10 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
   }, [
     anon,
     characterId,
+    chosenSpecs.length,
     granted,
     requestConsentFor,
     requestSignIn,
-    selectedSpecs.length,
     stackId,
   ]);
 
@@ -533,13 +647,12 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
     }
   }, [refusal, phase]);
 
-  // --- prompt enhancement ------------------------------------------------------
-  // An AI rewrite of each selected panel's composed prompt through the host's
-  // registered chat-completion step. Same money rules as generation: estimate
-  // every call, park ONE confirm with the summed price, submit only on
-  // confirm. The enhanced text is kept per spec index and lands on the sheet's
-  // panels at creation, where the composer uses it verbatim — so regenerates
-  // stay byte-identical to the original run.
+  // --- prompt enhancement (custom-panel editor only) ---------------------------
+  // An AI rewrite of the panel being written, through the host's registered
+  // chat-completion step. Same money rules as generation: estimate the call,
+  // park ONE confirm with the price, submit only on confirm. The rewrite is
+  // of the FULLY-COMPOSED prompt (identity clauses + triggers inside), so it
+  // stores as the panel's enhancedPrompt and generates verbatim.
 
   const runEnhanceWorkflow = useCallback(
     (body: WorkflowBody, key: string): Promise<EnhanceOutcome> =>
@@ -580,172 +693,197 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
   const runEnhanceWorkflowRef = useRef(runEnhanceWorkflow);
   runEnhanceWorkflowRef.current = runEnhanceWorkflow;
 
-  const estimateEnhance = useCallback(async () => {
+  const editorComposedPrompt = useCallback((): string | null => {
+    const c = library.characters.find((x) => x.id === characterId);
+    const s = library.stacks.find((x) => x.id === stackId);
+    if (!c || !s || !panelEditor) return null;
+    const tempPanel: SheetPanel = {
+      id: 'enhance-tmp',
+      kind: panelEditor.kind,
+      label: panelEditor.label || 'Custom panel',
+      promptModifier: panelEditor.prompt,
+      seed: 0,
+      status: 'queued',
+      outputs: [],
+      submitNonce: 0,
+    };
+    return composePanelPrompt(c, s, tempPanel, library.settings).prompt;
+  }, [characterId, library, panelEditor, stackId]);
+
+  const estimateCpEnhance = useCallback(async () => {
     const c = library.characters.find((x) => x.id === characterId);
     const s = library.stacks.find((x) => x.id === stackId);
     if (!c || !s) {
-      setEnhanceNotice('Pick a character and a stack first.');
-      setEnhancePhase('idle');
+      setCpNotice('Pick a character and a stack first.');
+      setCpPhase('idle');
       return;
     }
-    const indexes = allSpecs.map((_, i) => i).filter((i) => specSelected[i]);
-    if (indexes.length === 0) {
-      setEnhanceNotice('Select at least one panel to enhance.');
-      setEnhancePhase('idle');
+    const composed = editorComposedPrompt();
+    if (!composed) {
+      setCpPhase('idle');
       return;
     }
-    setEnhancePhase('estimating');
-    setEnhanceNotice(null);
-    setEnhanceQuote(null);
-    let total = 0;
+    setCpPhase('estimating');
+    setCpNotice(null);
+    setCpQuote(null);
     try {
-      for (const i of indexes) {
-        const composed = composePanelPrompt(
-          c,
-          s,
-          { ...allSpecs[i], id: 'enhance-tmp', seed: 0, status: 'queued', outputs: [], submitNonce: 0 },
-          library.settings,
-        ).prompt;
-        const snap = await estimate(buildEnhanceBody(composed, s.checkpoint.baseModel));
-        const cost = snap.cost?.total;
-        if (snap.status === 'failed' || snap.error || typeof cost !== 'number') {
-          setEnhanceNotice(
-            'Couldn’t price the enhancement — your original prompts are unchanged.',
-          );
-          setEnhancePhase('idle');
-          return;
-        }
-        total += cost;
+      const snap = await estimate(buildEnhanceBody(composed, s.checkpoint.baseModel));
+      const cost = snap.cost?.total;
+      if (snap.status === 'failed' || snap.error || typeof cost !== 'number') {
+        setCpNotice('Couldn’t price the enhancement — your prompt is unchanged.');
+        setCpPhase('idle');
+        return;
       }
+      setCpQuote(cost);
+      setCpPhase('confirming');
     } catch {
-      setEnhanceNotice(
-        'Couldn’t price the enhancement — your original prompts are unchanged.',
-      );
-      setEnhancePhase('idle');
-      return;
+      setCpNotice('Couldn’t price the enhancement — your prompt is unchanged.');
+      setCpPhase('idle');
     }
-    setEnhanceQuote({ total, specIndexes: indexes });
-    setEnhancePhase('confirming');
-  }, [allSpecs, characterId, estimate, library, specSelected, stackId]);
-  const estimateEnhanceRef = useRef(estimateEnhance);
-  estimateEnhanceRef.current = estimateEnhance;
+  }, [characterId, editorComposedPrompt, estimate, library, stackId]);
+  const estimateCpEnhanceRef = useRef(estimateCpEnhance);
+  estimateCpEnhanceRef.current = estimateCpEnhance;
 
-  const startEnhance = useCallback(() => {
-    setEnhanceNotice(null);
-    if (!characterId) {
-      setEnhanceNotice('Pick a character first.');
+  const startCpEnhance = useCallback(() => {
+    setCpNotice(null);
+    if (!panelEditor || panelEditor.prompt.trim() === '') {
+      setCpNotice('Write the panel prompt first, then enhance it.');
       return;
     }
-    if (!stackId) {
-      setEnhanceNotice('Pick a stack first.');
-      return;
-    }
-    if (selectedSpecs.length === 0) {
-      setEnhanceNotice('Select at least one panel to enhance.');
+    if (!characterId || !stackId) {
+      setCpNotice('Pick a character and a stack first.');
       return;
     }
     if (anon) {
       requestSignIn();
-      setEnhanceNotice("You're browsing as a guest — sign in to enhance prompts.");
+      setCpNotice("You're browsing as a guest — sign in to enhance prompts.");
       return;
     }
     if (!granted) {
-      // Same consent as generation (the step spends Buzz) — resume into
-      // pricing when the grant lands.
-      enhanceIntentRef.current = true;
-      setEnhanceConsentWait(true);
+      cpIntentRef.current = true;
+      setCpConsentWait(true);
       requestConsent({ scopes: [BUDGETED_SCOPE] });
       return;
     }
-    void estimateEnhanceRef.current();
-  }, [
-    anon,
-    characterId,
-    granted,
-    requestConsent,
-    requestSignIn,
-    selectedSpecs.length,
-    stackId,
-  ]);
+    void estimateCpEnhanceRef.current();
+  }, [anon, characterId, granted, panelEditor, requestConsent, requestSignIn, stackId]);
 
   // Auto-resume enhancement pricing after a consent grant.
   useEffect(() => {
-    if (granted && enhanceIntentRef.current) {
-      enhanceIntentRef.current = false;
-      setEnhanceConsentWait(false);
-      void estimateEnhanceRef.current();
+    if (granted && cpIntentRef.current) {
+      cpIntentRef.current = false;
+      setCpConsentWait(false);
+      void estimateCpEnhanceRef.current();
     }
   }, [granted]);
 
   useEffect(() => {
-    if (refusal && enhanceConsentWait) {
-      enhanceIntentRef.current = false;
-      setEnhanceConsentWait(false);
-      setEnhanceNotice(
+    if (refusal && cpConsentWait) {
+      cpIntentRef.current = false;
+      setCpConsentWait(false);
+      setCpNotice(
         'Spending approval isn’t available in this environment, so enhancement can’t run here.',
       );
     }
-  }, [refusal, enhanceConsentWait]);
+  }, [refusal, cpConsentWait]);
 
-  const runEnhanceSubmit = useCallback(async () => {
-    const quote = enhanceQuote;
+  const runCpEnhanceSubmit = useCallback(async () => {
     const c = library.characters.find((x) => x.id === characterId);
     const s = library.stacks.find((x) => x.id === stackId);
-    if (!quote || !c || !s) {
-      setEnhancePhase('idle');
-      setEnhanceQuote(null);
+    const composed = editorComposedPrompt();
+    if (cpQuote == null || !c || !s || !composed) {
+      setCpPhase('idle');
+      setCpQuote(null);
       return;
     }
-    setEnhancePhase('running');
-    enhanceRunRef.current += 1;
-    const runId = enhanceRunRef.current;
-    const results: Record<number, string> = {};
-    let failures = 0;
-    let withheld: string | null = null;
-    for (const i of quote.specIndexes) {
-      const composed = composePanelPrompt(
-        c,
-        s,
-        { ...allSpecs[i], id: 'enhance-tmp', seed: 0, status: 'queued', outputs: [], submitNonce: 0 },
-        library.settings,
-      ).prompt;
-      const outcome = await runEnhanceWorkflowRef.current(
-        buildEnhanceBody(composed, s.checkpoint.baseModel),
-        idempotencyKeyFor('enhance', `${c.id}:${i}`, runId),
-      );
-      if (outcome.type === 'text') results[i] = outcome.text;
-      else {
-        failures += 1;
-        if (outcome.type === 'withheld') withheld = outcome.reason;
-      }
+    setCpPhase('running');
+    cpRunRef.current += 1;
+    const outcome = await runEnhanceWorkflowRef.current(
+      buildEnhanceBody(composed, s.checkpoint.baseModel),
+      idempotencyKeyFor('enhance', `${c.id}:panel-editor`, cpRunRef.current),
+    );
+    setCpQuote(null);
+    setCpPhase('idle');
+    if (outcome.type === 'text') {
+      setPanelEditor((cur) => (cur ? { ...cur, enhancedPrompt: outcome.text } : cur));
+      setCpNotice(null);
+    } else if (outcome.type === 'withheld') {
+      setCpNotice(`The enhancement was withheld: ${outcome.reason} Your prompt is unchanged.`);
+    } else {
+      setCpNotice('The enhancement didn’t come back — your prompt is unchanged.');
     }
-    setEnhancedBySpec((cur) => ({ ...cur, ...results }));
-    setEnhanceQuote(null);
-    setEnhancePhase('idle');
-    // A prompt change invalidates any priced draft — the confirmed price must
-    // always match the submitted body byte-for-byte.
-    setDraft(null);
-    setEstimates({});
-    if (phase === 'confirm') setPhase('idle');
-    const got = Object.keys(results).length;
-    if (got > 0 && failures === 0) {
-      setEnhanceNotice(
-        `Enhanced ${got} prompt${got === 1 ? '' : 's'} — look for the Enhanced badges below, then price when you're ready.`,
-      );
-    } else if (got > 0) {
-      setEnhanceNotice(
-        `Enhanced ${got} of ${quote.specIndexes.length} prompts — the rest keep their original text.`,
-      );
-    } else if (withheld) {
-      setEnhanceNotice(
-        `The enhancement was withheld: ${withheld} Your original prompts are unchanged.`,
+  }, [characterId, cpQuote, editorComposedPrompt, library, stackId]);
+
+  // --- custom panel editor -----------------------------------------------------
+
+  const openPanelEditor = (existing?: CustomPanelDraft) => {
+    setCpPhase('idle');
+    setCpQuote(null);
+    setCpNotice(null);
+    setPanelEditor(
+      existing
+        ? {
+            id: existing.id,
+            label: existing.label,
+            kind: existing.kind,
+            prompt: existing.promptModifier,
+            enhancedPrompt: existing.enhancedPrompt,
+          }
+        : { label: '', kind: 'scenario', prompt: '' },
+    );
+  };
+
+  const savePanelEditor = () => {
+    if (!panelEditor) return;
+    const prompt = panelEditor.prompt.trim();
+    if (prompt === '') {
+      setCpNotice('Write what this panel should show first.');
+      return;
+    }
+    const label =
+      panelEditor.label.trim() ||
+      (prompt.length > 34 ? `${prompt.slice(0, 34)}…` : prompt);
+    if (panelEditor.id) {
+      setCustomPanels((cur) =>
+        cur.map((p) =>
+          p.id === panelEditor.id
+            ? {
+                ...p,
+                label,
+                kind: panelEditor.kind,
+                promptModifier: prompt,
+                enhancedPrompt: panelEditor.enhancedPrompt,
+              }
+            : p,
+        ),
       );
     } else {
-      setEnhanceNotice(
-        'The enhancement didn’t come back — your original prompts are unchanged.',
-      );
+      setCustomPanels((cur) => [
+        ...cur,
+        {
+          id: newPanelId(),
+          kind: panelEditor.kind,
+          label,
+          promptModifier: prompt,
+          selected: true,
+          enhancedPrompt: panelEditor.enhancedPrompt,
+        },
+      ]);
     }
-  }, [allSpecs, characterId, enhanceQuote, library, phase, stackId]);
+    setPanelEditor(null);
+  };
+
+  /** Enhanced text was composed for a specific character + stack — changing
+   *  either makes it stale, so it drops rather than silently mismatching. */
+  const dropStaleEnhancements = () => {
+    setCustomPanels((cur) =>
+      cur.map((p) => (p.enhancedPrompt ? { ...p, enhancedPrompt: undefined } : p)),
+    );
+    setPanelEditor(null);
+    setCpPhase('idle');
+    setCpQuote(null);
+    setCpNotice(null);
+  };
 
   // --- render ------------------------------------------------------------------
 
@@ -781,26 +919,6 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
       </Card>
     );
   }
-  if (library.stacks.length === 0) {
-    return (
-      <Card>
-        <Stack gap="sm">
-          <p style={{ margin: 0, opacity: 0.75 }}>
-            Sheets generate with a stack — a checkpoint plus LoRAs. You don’t
-            have one yet, so let’s fix that first.
-          </p>
-          <div>
-            <Button
-              onClick={() => onCreateStack(characterId)}
-              data-testid="builder-create-stack"
-            >
-              Create a stack
-            </Button>
-          </div>
-        </Stack>
-      </Card>
-    );
-  }
 
   const busy = phase === 'estimating' || phase === 'submitting' || phase === 'needs-consent';
 
@@ -828,6 +946,8 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
       ? totalEstimate - spendableBalance
       : null;
 
+  const panelCount = allSpecs.length + customPanels.length;
+
   return (
     <Stack gap="md">
       <h2 style={{ margin: 0, fontSize: 20 }}>Sheet Builder</h2>
@@ -848,36 +968,112 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
 
       {phase !== 'confirm' ? (
         <Card>
-          <Stack gap="sm">
-            <Group gap="md" align="flex-end">
+          <Stack gap="md">
+            <div>
               <Select
                 label="Character"
                 value={characterId}
                 onChange={(v) => {
                   setCharacterId(v);
-                  // Enhanced prompts are composed from the old character —
-                  // they don't carry over to a different one.
-                  setEnhancedBySpec({});
-                  setEnhanceQuote(null);
-                  setEnhancePhase('idle');
-                  setEnhanceNotice(null);
+                  dropStaleEnhancements();
                 }}
                 options={library.characters.map((c) => ({ value: c.id, label: c.name }))}
               />
-              <Select
-                label="Stack"
-                value={stackId}
-                onChange={(v) => {
-                  setStackId(v);
-                  // The rewrite is tuned to the old checkpoint's family.
-                  setEnhancedBySpec({});
-                  setEnhanceQuote(null);
-                  setEnhancePhase('idle');
-                  setEnhanceNotice(null);
-                }}
-                options={library.stacks.map((s) => ({ value: s.id, label: s.name }))}
-              />
-            </Group>
+            </div>
+
+            {/* Stack picker: full-detail cards, plus inline create. */}
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>Stack</div>
+              {library.stacks.length === 0 && !stackCreateOpen && (
+                <p style={{ margin: '0 0 8px', fontSize: 13, opacity: 0.7 }}>
+                  No stacks yet — create the first one right here.
+                </p>
+              )}
+              <div className="css-stack-picker">
+                {library.stacks.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className="css-choice-card"
+                    data-testid="builder-stack-card"
+                    data-stack-id={s.id}
+                    data-selected={stackId === s.id}
+                    aria-pressed={stackId === s.id}
+                    disabled={busy}
+                    onClick={() => {
+                      setStackId(s.id);
+                      dropStaleEnhancements();
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: 15 }}>{s.name}</div>
+                    <div style={{ fontSize: 13, opacity: 0.8, marginTop: 2 }}>
+                      {checkpointDisplayLabel(s.checkpoint)}
+                    </div>
+                    <Group gap="xs" wrap style={{ marginTop: 8 }}>
+                      <Badge size="sm" variant="light">{s.checkpoint.baseModel}</Badge>
+                      <Badge size="sm" variant="outline">
+                        {s.loras.length} LoRA{s.loras.length === 1 ? '' : 's'}
+                      </Badge>
+                    </Group>
+                    {s.loras.length > 0 && (
+                      <Stack gap={2} style={{ marginTop: 8 }}>
+                        {s.loras.map((l) => (
+                          <span key={l.modelVersionId} style={{ fontSize: 12, opacity: 0.75 }}>
+                            {l.name ?? `LoRA #${l.modelVersionId}`} · {l.strength}
+                            {l.triggerWords.length > 0 ? ` · ${l.triggerWords.join(', ')}` : ''}
+                          </span>
+                        ))}
+                      </Stack>
+                    )}
+                    {s.notes && (
+                      <div style={{ fontSize: 12, opacity: 0.6, marginTop: 8 }}>{s.notes}</div>
+                    )}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="css-choice-card css-choice-add"
+                  data-testid="builder-stack-new"
+                  disabled={busy}
+                  onClick={() => setStackCreateOpen((v) => !v)}
+                >
+                  <span style={{ fontSize: 22, lineHeight: 1 }}>＋</span>
+                  <span style={{ fontSize: 14, fontWeight: 500 }}>New stack</span>
+                </button>
+              </div>
+
+              {stackCreateOpen && (
+                <div style={{ marginTop: 12 }}>
+                  <Group gap="xs" wrap style={{ marginBottom: 10 }}>
+                    {STACK_PRESETS.map((p) => (
+                      <Button
+                        key={p.slug}
+                        size="sm"
+                        variant={stackPreset?.name === p.name ? 'filled' : 'light'}
+                        data-testid={`builder-stack-preset-${p.slug}`}
+                        onClick={() => setStackPreset({ name: p.name, notes: p.notes })}
+                      >
+                        {p.label}
+                      </Button>
+                    ))}
+                  </Group>
+                  <StackEditor
+                    key={stackPreset?.name ?? 'blank'}
+                    preset={stackPreset ?? undefined}
+                    onClose={() => {
+                      setStackCreateOpen(false);
+                      setStackPreset(null);
+                    }}
+                    onSaved={(saved: ModelStack) => {
+                      setStackId(saved.id);
+                      setStackCreateOpen(false);
+                      setStackPreset(null);
+                    }}
+                    saveStack={library.saveStack}
+                  />
+                </div>
+              )}
+            </div>
 
             <div>
               <Button
@@ -931,40 +1127,259 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
               </Stack>
             )}
 
+            {/* Panel picker: icon cards instead of a checkbox list. */}
             <div>
               <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>
-                Panels ({selectedSpecs.length}/{allSpecs.length})
+                Panels ({chosenSpecs.length}/{panelCount})
               </div>
               <div className="css-panel-picker">
                 {allSpecs.map((spec, i) => (
-                  <label
+                  <button
                     key={`${spec.kind}-${i}`}
-                    style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 14, cursor: 'pointer' }}
+                    type="button"
+                    className="css-choice-card"
+                    data-testid="builder-panel-card"
+                    data-kind={spec.kind}
+                    data-selected={!!specSelected[i]}
+                    aria-pressed={!!specSelected[i]}
+                    disabled={busy}
+                    onClick={() =>
+                      setSpecSelected((cur) => cur.map((v, j) => (j === i ? !v : v)))
+                    }
                   >
-                    <input
-                      type="checkbox"
-                      checked={!!specSelected[i]}
-                      disabled={busy}
-                      onChange={(e) =>
-                        setSpecSelected((cur) => cur.map((v, j) => (j === i ? e.target.checked : v)))
-                      }
-                    />
-                    <span style={{ fontWeight: 500 }}>{spec.label}</span>
-                    <Badge size="sm" variant="outline" style={{ textTransform: 'capitalize' }}>
-                      {spec.kind}
-                    </Badge>
-                    {enhancedBySpec[i] && (
-                      <span
-                        data-testid="se-enhance-applied"
-                        style={{ fontSize: 12, display: 'inline-flex', maxWidth: '45%', flexDirection: 'column' }}
-                      >
-                        <Badge size="sm" color="grape">Enhanced ✦</Badge>
-                        <span style={{ opacity: 0.6, marginTop: 2 }}>{enhancedBySpec[i]}</span>
-                      </span>
-                    )}
-                  </label>
+                    <span className="css-panel-icon">
+                      <PanelKindIcon kind={spec.kind} />
+                    </span>
+                    <div style={{ fontWeight: 500, fontSize: 14 }}>{spec.label}</div>
+                    <div
+                      style={{
+                        fontSize: 12,
+                        opacity: 0.6,
+                        marginTop: 3,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {spec.promptModifier}
+                    </div>
+                  </button>
                 ))}
+                {customPanels.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className="css-choice-card"
+                    data-testid="builder-panel-custom"
+                    data-panel-id={p.id}
+                    data-selected={p.selected}
+                    aria-pressed={p.selected}
+                    disabled={busy}
+                    onClick={() =>
+                      setCustomPanels((cur) =>
+                        cur.map((x) => (x.id === p.id ? { ...x, selected: !x.selected } : x)),
+                      )
+                    }
+                  >
+                    <span className="css-panel-icon">
+                      <PanelKindIcon kind={p.kind} />
+                    </span>
+                    <div style={{ fontWeight: 500, fontSize: 14 }}>{p.label}</div>
+                    <Group gap="xs" style={{ marginTop: 4 }}>
+                      <Badge size="sm" color="grape" variant="light">Custom</Badge>
+                      {p.enhancedPrompt && (
+                        <Badge size="sm" color="grape">Enhanced ✦</Badge>
+                      )}
+                    </Group>
+                    <div
+                      style={{
+                        fontSize: 12,
+                        opacity: 0.6,
+                        marginTop: 3,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {p.promptModifier}
+                    </div>
+                    <span
+                      role="button"
+                      aria-label={`Edit ${p.label}`}
+                      data-testid={`builder-panel-edit-${p.id}`}
+                      style={{ position: 'absolute', bottom: 8, right: 34, fontSize: 12, opacity: 0.75 }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openPanelEditor(p);
+                      }}
+                    >
+                      Edit
+                    </span>
+                    <span
+                      role="button"
+                      aria-label={`Remove ${p.label}`}
+                      data-testid={`builder-panel-remove-${p.id}`}
+                      style={{ position: 'absolute', bottom: 8, right: 10, fontSize: 14, opacity: 0.75 }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCustomPanels((cur) => cur.filter((x) => x.id !== p.id));
+                      }}
+                    >
+                      ×
+                    </span>
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="css-choice-card css-choice-add"
+                  data-testid="builder-panel-new"
+                  disabled={busy}
+                  onClick={() => openPanelEditor()}
+                >
+                  <span style={{ fontSize: 22, lineHeight: 1 }}>＋</span>
+                  <span style={{ fontSize: 14, fontWeight: 500 }}>New panel</span>
+                </button>
               </div>
+
+              {panelEditor && (
+                <Card padding="sm" style={{ marginTop: 12 }} data-testid="builder-panel-editor">
+                  <Stack gap="sm">
+                    <Group justify="space-between" align="center">
+                      <strong style={{ fontSize: 14 }}>
+                        {panelEditor.id ? 'Edit panel' : 'New panel'}
+                      </strong>
+                      <Button size="sm" variant="subtle" onClick={() => setPanelEditor(null)}>
+                        Cancel
+                      </Button>
+                    </Group>
+                    <Group gap="md" align="flex-end">
+                      <TextInput
+                        label="Label"
+                        placeholder="Riding the sky-whale"
+                        value={panelEditor.label}
+                        onChange={(e) => {
+                          const value = e.currentTarget.value;
+                          setPanelEditor((cur) =>
+                            cur ? { ...cur, label: value } : cur,
+                          );
+                        }}
+                        data-testid="builder-panel-label"
+                      />
+                      <Select
+                        label="Type"
+                        value={panelEditor.kind}
+                        onChange={(v) =>
+                          setPanelEditor((cur) =>
+                            cur ? { ...cur, kind: v as PanelKind } : cur,
+                          )
+                        }
+                        options={PANEL_KINDS.map((k) => ({ value: k, label: PANEL_LABELS[k] }))}
+                        data-testid="builder-panel-kind"
+                      />
+                    </Group>
+                    <Textarea
+                      label="Prompt"
+                      placeholder="riding a sky-whale at dawn, wind in her hair, distant floating islands"
+                      value={panelEditor.prompt}
+                      onChange={(e) => {
+                        const value = e.currentTarget.value;
+                        // Typing over an enhanced prompt returns authorship
+                        // to the viewer — drop the now-stale rewrite.
+                        setPanelEditor((cur) =>
+                          cur ? { ...cur, prompt: value, enhancedPrompt: undefined } : cur,
+                        );
+                        setCpQuote(null);
+                        setCpPhase('idle');
+                      }}
+                      rows={3}
+                      data-testid="builder-panel-prompt"
+                    />
+
+                    {/* Enhancement lives here only — for panels being written. */}
+                    <Stack gap="xs">
+                      <Group justify="space-between" align="center">
+                        <span style={{ fontSize: 13, opacity: 0.7 }}>
+                          AI can rewrite this prompt with richer visual detail —
+                          priced first, like everything else.
+                        </span>
+                        <Button
+                          variant="light"
+                          color="grape"
+                          onClick={startCpEnhance}
+                          loading={cpPhase === 'estimating' || cpPhase === 'running'}
+                          disabled={busy || cpPhase === 'confirming'}
+                          data-testid="se-enhance"
+                        >
+                          {cpPhase === 'running'
+                            ? 'Enhancing…'
+                            : cpPhase === 'estimating'
+                              ? 'Pricing…'
+                              : 'Enhance prompt ✦'}
+                        </Button>
+                      </Group>
+                      {cpConsentWait && (
+                        <Alert color="info" data-testid="se-enhance-consent">
+                          <Loader size="sm" /> Waiting for your approval in the Civitai dialog…
+                        </Alert>
+                      )}
+                      {cpPhase === 'confirming' && cpQuote != null && (
+                        <Alert color="info" data-testid="se-enhance-confirm">
+                          <Stack gap="xs">
+                            <span>
+                              Enhance 1 prompt · ≈{formatCost(cpQuote)} Buzz
+                            </span>
+                            <Group justify="flex-end">
+                              <Button
+                                variant="subtle"
+                                onClick={() => {
+                                  setCpQuote(null);
+                                  setCpPhase('idle');
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                              <Button
+                                color="grape"
+                                onClick={() => void runCpEnhanceSubmit()}
+                                data-testid="se-enhance-confirm-run"
+                              >
+                                Enhance · {formatCost(cpQuote)} Buzz
+                              </Button>
+                            </Group>
+                          </Stack>
+                        </Alert>
+                      )}
+                      {panelEditor.enhancedPrompt && (
+                        <Alert color="info" data-testid="se-enhance-applied">
+                          <Stack gap={4}>
+                            <span>
+                              <Badge size="sm" color="grape">Enhanced ✦</Badge>
+                            </span>
+                            <span style={{ fontSize: 13 }}>{panelEditor.enhancedPrompt}</span>
+                            <span style={{ fontSize: 12, opacity: 0.65 }}>
+                              This panel generates from the enhanced text. Edit
+                              the prompt above to use your own words instead.
+                            </span>
+                          </Stack>
+                        </Alert>
+                      )}
+                      {cpNotice && (
+                        <Alert color="info" data-testid="se-enhance-notice">
+                          {cpNotice}
+                        </Alert>
+                      )}
+                    </Stack>
+
+                    <Group justify="flex-end">
+                      <Button onClick={savePanelEditor} data-testid="builder-panel-add">
+                        {panelEditor.id ? 'Save panel' : 'Add panel'}
+                      </Button>
+                    </Group>
+                  </Stack>
+                </Card>
+              )}
             </div>
 
             <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 14, cursor: character?.referenceImage ? 'pointer' : 'default', opacity: character?.referenceImage ? 1 : 0.5 }}>
@@ -978,73 +1393,11 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
               {!character?.referenceImage && ' (no portrait on this character)'}
             </label>
 
-            <Stack gap="xs">
-              <Group justify="space-between" align="center">
-                <span style={{ fontSize: 13, opacity: 0.7 }}>
-                  AI can rewrite the selected prompts with richer visual detail
-                  before you price — priced first, like everything else.
-                </span>
-                <Button
-                  variant="light"
-                  color="grape"
-                  onClick={startEnhance}
-                  loading={enhancePhase === 'estimating' || enhancePhase === 'running'}
-                  disabled={busy || enhancePhase === 'confirming' || selectedSpecs.length === 0}
-                  data-testid="se-enhance"
-                >
-                  {enhancePhase === 'running'
-                    ? 'Enhancing…'
-                    : enhancePhase === 'estimating'
-                      ? 'Pricing…'
-                      : 'Enhance prompts ✦'}
-                </Button>
-              </Group>
-              {enhanceConsentWait && (
-                <Alert color="info" data-testid="se-enhance-consent">
-                  <Loader size="sm" /> Waiting for your approval in the Civitai dialog…
-                </Alert>
-              )}
-              {enhancePhase === 'confirming' && enhanceQuote && (
-                <Alert color="info" data-testid="se-enhance-confirm">
-                  <Stack gap="xs">
-                    <span>
-                      Enhance {enhanceQuote.specIndexes.length} prompt
-                      {enhanceQuote.specIndexes.length === 1 ? '' : 's'} · ≈
-                      {formatCost(enhanceQuote.total)} Buzz
-                    </span>
-                    <Group justify="flex-end">
-                      <Button
-                        variant="subtle"
-                        onClick={() => {
-                          setEnhanceQuote(null);
-                          setEnhancePhase('idle');
-                        }}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        color="grape"
-                        onClick={() => void runEnhanceSubmit()}
-                        data-testid="se-enhance-confirm-run"
-                      >
-                        Enhance · {formatCost(enhanceQuote.total)} Buzz
-                      </Button>
-                    </Group>
-                  </Stack>
-                </Alert>
-              )}
-              {enhanceNotice && (
-                <Alert color="info" data-testid="se-enhance-notice">
-                  {enhanceNotice}
-                </Alert>
-              )}
-            </Stack>
-
             {phase === 'estimating' && (
               <Group gap="sm" align="center">
                 <Loader size="sm" />
                 <span style={{ fontSize: 14 }}>
-                  Pricing panels… {Object.keys(estimates).length}/{selectedSpecs.length}
+                  Pricing panels… {Object.keys(estimates).length}/{chosenSpecs.length}
                 </span>
               </Group>
             )}
@@ -1064,14 +1417,14 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
               <Button
                 onClick={startPricing}
                 loading={phase === 'estimating'}
-                disabled={busy || selectedSpecs.length === 0}
+                disabled={busy || chosenSpecs.length === 0}
                 data-testid="se-builder-price"
               >
                 {anon
                   ? 'Sign in to generate'
-                  : selectedSpecs.length === 0
+                  : chosenSpecs.length === 0
                     ? 'Select a panel to price'
-                    : `Price ${selectedSpecs.length} panel${selectedSpecs.length === 1 ? '' : 's'}`}
+                    : `Price ${chosenSpecs.length} panel${chosenSpecs.length === 1 ? '' : 's'}`}
               </Button>
             </Group>
           </Stack>

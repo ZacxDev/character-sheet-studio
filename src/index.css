@@ -313,12 +313,92 @@ button:focus-visible {
   }
 }
 
-/* The Builder's panel checklist. */
+/* The Builder's panel checklist — icon cards now (v0.1.20). */
 .css-panel-picker {
   display: grid;
-  gap: 4px 20px;
-  grid-template-columns: repeat(auto-fill, minmax(min(230px, 100%), 1fr));
-  align-items: start;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr));
+  align-items: stretch;
+}
+
+/* Selectable choice cards (stack picker, panel picker). One visual language:
+   surface-2 tile, quiet border; selected = primary ring + tint + check chip. */
+.css-choice-card {
+  position: relative;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+  background: var(--civitai-color-surface-2);
+  border: 1px solid var(--civitai-color-border);
+  border-radius: 12px;
+  padding: 12px;
+  color: var(--civitai-color-text);
+  font: inherit;
+  transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+
+.css-choice-card:hover {
+  border-color: var(--civitai-color-primary);
+}
+
+.css-choice-card[data-selected='true'] {
+  border-color: var(--civitai-color-primary);
+  box-shadow: 0 0 0 1px var(--civitai-color-primary);
+  background: color-mix(in srgb, var(--civitai-color-primary) 10%, var(--civitai-color-surface-2));
+}
+
+.css-choice-card[data-selected='true']::after {
+  content: '✓';
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--civitai-color-primary);
+  color: var(--civitai-color-primary-fg, #06242e);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.css-choice-add {
+  border-style: dashed;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  color: var(--civitai-color-text-dimmed);
+  min-height: 92px;
+}
+
+.css-choice-add:hover {
+  color: var(--civitai-color-primary);
+}
+
+/* Stack picker: roomier cards than the panel grid. */
+.css-stack-picker {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(min(250px, 100%), 1fr));
+  align-items: stretch;
+}
+
+/* Panel-kind icons sit in a soft tile at the top of each panel card. */
+.css-panel-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--civitai-color-primary) 12%, transparent);
+  color: var(--civitai-color-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
 }
 
 /* Sheet View's generated-panel grid (was an inline style). */

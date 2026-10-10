@@ -89,10 +89,8 @@ describe('stack picker + builder funnel', () => {
     await screen.findByRole('button', { name: 'Characters' });
 
     await user.click(screen.getByRole('button', { name: 'Sheet Builder' }));
-    await screen.findByTestId('builder-create-stack');
-    await user.click(screen.getByTestId('builder-create-stack'));
-
-    // Lands on the stack create page, ready to create.
+    // Zero stacks no longer detours to another tab — the inline stack
+    // create starts open right in the Builder.
     await screen.findByTestId('stack-name');
   });
 });
@@ -166,19 +164,15 @@ describe('Sheet Builder panel gate + guest pricing', () => {
     expect(priceBtn).toHaveTextContent('Price 4 panels');
     expect(priceBtn).not.toBeDisabled();
 
-    // Uncheck every checked panel (the img2img box is disabled — no portrait).
-    for (const box of screen.getAllByRole('checkbox')) {
-      const el = box as HTMLInputElement;
-      if (el.checked && !el.disabled) await user.click(el);
+    // Unselect every picked panel card.
+    for (const card of screen.getAllByTestId('builder-panel-card')) {
+      if (card.dataset.selected === 'true') await user.click(card);
     }
     await waitFor(() => expect(priceBtn).toHaveTextContent('Select a panel to price'));
     expect(priceBtn).toBeDisabled();
 
-    // Checking one panel back re-enables pricing for exactly that panel.
-    const first = screen.getAllByRole('checkbox').find(
-      (b) => !(b as HTMLInputElement).disabled,
-    ) as HTMLInputElement;
-    await user.click(first);
+    // Picking one panel card back re-enables pricing for exactly that panel.
+    await user.click(screen.getAllByTestId('builder-panel-card')[0]);
     await waitFor(() => expect(priceBtn).toHaveTextContent('Price 1 panel'));
     expect(priceBtn).not.toBeDisabled();
   });
@@ -214,17 +208,20 @@ describe('Sheet Builder panel gate + guest pricing', () => {
 
     await screen.findByTestId('se-builder-price');
     const characterSelect = screen.getByLabelText('Character') as HTMLSelectElement;
-    const stackSelect = screen.getByLabelText('Stack') as HTMLSelectElement;
-    expect(stackSelect.value).toBe('stack-1');
+    const cardFor = (id: string) =>
+      screen
+        .getAllByTestId('builder-stack-card')
+        .find((c) => c.dataset.stackId === id) as HTMLElement;
+    expect(cardFor('stack-1').dataset.selected).toBe('true');
 
     // Switching to a character with a legacy default does not move the stack.
     await user.selectOptions(characterSelect, 'char-2');
-    expect(stackSelect.value).toBe('stack-1');
+    expect(cardFor('stack-1').dataset.selected).toBe('true');
 
     // And a stack picked for this run survives later character switches.
-    await user.selectOptions(stackSelect, 'stack-2');
+    await user.click(cardFor('stack-2'));
     await user.selectOptions(characterSelect, 'char-1');
-    expect(stackSelect.value).toBe('stack-2');
+    expect(cardFor('stack-2').dataset.selected).toBe('true');
   });
 
   it('guest Price button carries the sign-in ask (no duplicate notice)', async () => {
@@ -1134,5 +1131,75 @@ describe('Character form randomizer + seed toggle', () => {
     expect(screen.getByTestId('char-step-indicator')).toHaveTextContent(
       'Step 6 of 6 · Seed policy',
     );
+  });
+});
+
+describe('Builder card pickers + inline create (v0.1.20)', () => {
+  const renderBuilder = (over: Partial<SheetLibrary> = {}) =>
+    render(
+      <SheetBuilder
+        library={stubLibrary(over)}
+        preselectedCharacterId={null}
+        onOpenSheet={() => {}}
+        onCreateStack={() => {}}
+        onCreateCharacter={() => {}}
+      />,
+    );
+
+  it('stack cards carry the full stack details', async () => {
+    renderBuilder();
+    const card = (await screen.findAllByTestId('builder-stack-card'))[0];
+    expect(card).toHaveTextContent('SDXL Anime');
+    expect(card).toHaveTextContent('SDXL 1.0');
+    expect(card).toHaveTextContent(/LoRA/);
+  });
+
+  it('inline stack create: a preset prefills the editor and saving hands back the stack', async () => {
+    const savedStacks: ModelStack[] = [];
+    const user = userEvent.setup();
+    renderBuilder({
+      saveStack: async (s) => {
+        savedStacks.push(s);
+        return null;
+      },
+    });
+
+    await user.click(await screen.findByTestId('builder-stack-new'));
+    await user.click(screen.getByTestId('builder-stack-preset-anime'));
+    const nameInput = (await screen.findByTestId('stack-name')) as HTMLInputElement;
+    expect(nameInput.value).toBe('Anime Sheet');
+
+    await user.click(screen.getByTestId('stack-save'));
+    await waitFor(() => expect(savedStacks).toHaveLength(1));
+    expect(savedStacks[0].name).toBe('Anime Sheet');
+  });
+
+  it('custom panels: create counts toward pricing, remove takes it back out', async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+    const priceBtn = await screen.findByTestId('se-builder-price');
+    expect(priceBtn).toHaveTextContent('Price 4 panels');
+
+    await user.click(screen.getByTestId('builder-panel-new'));
+    await user.type(screen.getByTestId('builder-panel-label'), 'Sky whale ride');
+    await user.type(screen.getByTestId('builder-panel-prompt'), 'riding a sky-whale at dawn');
+    await user.click(screen.getByTestId('builder-panel-add'));
+
+    const custom = await screen.findByTestId('builder-panel-custom');
+    expect(custom).toHaveTextContent('Sky whale ride');
+    await waitFor(() => expect(priceBtn).toHaveTextContent('Price 5 panels'));
+
+    await user.click(screen.getByTestId(`builder-panel-remove-${custom.dataset.panelId}`));
+    await waitFor(() => expect(priceBtn).toHaveTextContent('Price 4 panels'));
+  });
+
+  it('the Enhance button exists only inside the custom-panel editor', async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+    await screen.findByTestId('se-builder-price');
+    expect(screen.queryByTestId('se-enhance')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('builder-panel-new'));
+    expect(await screen.findByTestId('se-enhance')).toBeInTheDocument();
   });
 });
