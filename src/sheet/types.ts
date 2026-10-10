@@ -98,6 +98,11 @@ export interface Character {
   triggerWords: string[];
   negativePrompt: string;
   referenceImage?: CharacterRefImage;
+  /**
+   * Legacy per-character stack link from older saves. It is retained only so
+   * those records normalize unchanged; the app no longer writes or reads it —
+   * a stack is chosen in the Sheet Builder for each run.
+   */
   defaultStackId?: string;
   seedPolicy: SeedPolicy;
   createdAt: string;

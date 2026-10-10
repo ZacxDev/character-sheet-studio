@@ -81,9 +81,9 @@ export interface SheetBuilderProps {
   /** Stack handed over by a return trip from the Stacks tab (create flow). */
   preselectedStackId?: string | null;
   onOpenSheet: (sheetId: string) => void;
-  /** Take the viewer to the Stacks tab so they can create a stack. */
-  onCreateStack: () => void;
-  /** Take the viewer to the Characters tab so they can create a character. */
+  /** Take the viewer to create a stack, preserving the character in progress. */
+  onCreateStack: (characterId: string) => void;
+  /** Take the viewer to create a character. */
   onCreateCharacter: () => void;
 }
 
@@ -172,19 +172,16 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
   const character = library.characters.find((c) => c.id === characterId);
   const stack = library.stacks.find((s) => s.id === stackId);
 
-  // Default the stack to the character's preferred stack when the character changes.
+  // Character and stack are independent choices for this run. Heal the stack
+  // selection only when it is empty or points at a deleted stack; switching
+  // characters never changes the stack the viewer picked.
   useEffect(() => {
-    const c = library.characters.find((x) => x.id === characterId);
-    if (!c) return;
+    if (!library.ready) return;
     setStackId((cur) => {
       if (cur && library.stacks.some((s) => s.id === cur)) return cur;
-      return c.defaultStackId && library.stacks.some((s) => s.id === c.defaultStackId)
-        ? (c.defaultStackId as string)
-        : (library.stacks[0]?.id ?? '');
+      return library.stacks[0]?.id ?? '';
     });
-    // Re-sync only when the character or the stack list changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [characterId, library.characters, library.stacks]);
+  }, [library.ready, library.stacks]);
 
   // If the preselected character arrives after mount (deep link), adopt it.
   useEffect(() => {
@@ -793,7 +790,10 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
             have one yet, so let’s fix that first.
           </p>
           <div>
-            <Button onClick={onCreateStack} data-testid="builder-create-stack">
+            <Button
+              onClick={() => onCreateStack(characterId)}
+              data-testid="builder-create-stack"
+            >
               Create a stack
             </Button>
           </div>

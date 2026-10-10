@@ -227,7 +227,7 @@ button:focus-visible {
   background: var(--civitai-color-surface-2);
 }
 
-.css-nav-item[aria-selected='true'] {
+.css-nav-item[aria-current='page'] {
   color: var(--civitai-color-primary);
   background: var(--civitai-color-primary-light);
 }

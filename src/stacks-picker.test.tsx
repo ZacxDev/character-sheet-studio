@@ -51,9 +51,9 @@ describe('stack picker + builder funnel', () => {
     });
     const user = userEvent.setup();
     render(<App />);
-    await screen.findByRole('tab', { name: 'Characters' });
+    await screen.findByRole('button', { name: 'Characters' });
 
-    await user.click(screen.getByRole('tab', { name: 'Stacks' }));
+    await user.click(screen.getByRole('button', { name: 'Stacks' }));
     await user.click(screen.getByRole('button', { name: 'New stack' }));
     await user.click(screen.getByTestId('stack-checkpoint-change'));
 
@@ -86,16 +86,14 @@ describe('stack picker + builder funnel', () => {
     uninstall = installMockMoneyHost({ storage: { seed } });
     const user = userEvent.setup();
     render(<App />);
-    await screen.findByRole('tab', { name: 'Characters' });
+    await screen.findByRole('button', { name: 'Characters' });
 
-    await user.click(screen.getByRole('tab', { name: 'Sheet Builder' }));
+    await user.click(screen.getByRole('button', { name: 'Sheet Builder' }));
     await screen.findByTestId('builder-create-stack');
     await user.click(screen.getByTestId('builder-create-stack'));
 
-    // Lands on the Stacks tab, ready to create.
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'New stack' })).toBeInTheDocument(),
-    );
+    // Lands on the stack create page, ready to create.
+    await screen.findByTestId('stack-name');
   });
 });
 
@@ -185,6 +183,50 @@ describe('Sheet Builder panel gate + guest pricing', () => {
     expect(priceBtn).not.toBeDisabled();
   });
 
+  it('Builder stack choice is independent of the character (no default-stack link)', async () => {
+    uninstall = installMockMoneyHost({});
+    const user = userEvent.setup();
+    const secondStack: ModelStack = {
+      ...demoStack,
+      id: 'stack-2',
+      name: 'Pony Detail',
+    };
+    const linkedChar: Character = {
+      ...demoChar,
+      id: 'char-2',
+      name: 'Mina',
+      // Legacy saved link: even when present in storage, the Builder must
+      // not let it choose the stack for a run.
+      defaultStackId: 'stack-2',
+    };
+    render(
+      <SheetBuilder
+        library={stubLibrary({
+          characters: [demoChar, linkedChar],
+          stacks: [demoStack, secondStack],
+        })}
+        preselectedCharacterId={null}
+        onOpenSheet={() => {}}
+        onCreateStack={() => {}}
+        onCreateCharacter={() => {}}
+      />,
+    );
+
+    await screen.findByTestId('se-builder-price');
+    const characterSelect = screen.getByLabelText('Character') as HTMLSelectElement;
+    const stackSelect = screen.getByLabelText('Stack') as HTMLSelectElement;
+    expect(stackSelect.value).toBe('stack-1');
+
+    // Switching to a character with a legacy default does not move the stack.
+    await user.selectOptions(characterSelect, 'char-2');
+    expect(stackSelect.value).toBe('stack-1');
+
+    // And a stack picked for this run survives later character switches.
+    await user.selectOptions(stackSelect, 'stack-2');
+    await user.selectOptions(characterSelect, 'char-1');
+    expect(stackSelect.value).toBe('stack-2');
+  });
+
   it('guest Price button carries the sign-in ask (no duplicate notice)', async () => {
     const outbound: { type?: string }[] = [];
     uninstall = installMockMoneyHost({
@@ -219,7 +261,7 @@ describe('Sheet Builder panel gate + guest pricing', () => {
   it('guest sees a Sign in button in the app header', async () => {
     uninstall = installMockMoneyHost({ viewer: null });
     render(<App />);
-    await screen.findByRole('tab', { name: 'Characters' });
+    await screen.findByRole('button', { name: 'Characters' });
     expect(screen.getByTestId('se-sign-in')).toBeInTheDocument();
   });
 });
@@ -439,7 +481,7 @@ describe('Character drill-in, sheet previews, generation skeleton', () => {
     uninstall = installMockMoneyHost({ storage: { seed } });
     const user = userEvent.setup();
     render(<App />);
-    await screen.findByRole('tab', { name: 'Characters' });
+    await screen.findByRole('button', { name: 'Characters' });
 
     // The generated panel shows on the character card as a thumbnail…
     const card = await screen.findByTestId('char-card');
@@ -579,7 +621,7 @@ describe('Batch B/C leftovers', () => {
     uninstall = installMockMoneyHost({ storage: { seed } });
     const user = userEvent.setup();
     render(<App />);
-    await screen.findByRole('tab', { name: 'Characters' });
+    await screen.findByRole('button', { name: 'Characters' });
 
     // Drill in by clicking the character card (2 sheets).
     const card = await screen.findByTestId('char-card');
@@ -603,7 +645,7 @@ describe('Batch B/C leftovers', () => {
     expect(screen.queryByText('Partially done')).not.toBeInTheDocument();
 
     // Clicking the already-active Sheets tab returns to the list.
-    await user.click(screen.getByRole('tab', { name: 'Sheets' }));
+    await user.click(screen.getByRole('button', { name: 'Sheets' }));
     expect((await screen.findAllByRole('button', { name: 'Open' })).length).toBe(2);
   });
 
@@ -978,6 +1020,15 @@ describe('Character form randomizer + seed toggle', () => {
   const field = (label: string) =>
     screen.getByLabelText(label, { exact: false }) as HTMLInputElement | HTMLTextAreaElement;
 
+  const nextStep = async (
+    user: ReturnType<typeof userEvent.setup>,
+    times = 1,
+  ) => {
+    for (let i = 0; i < times; i++) {
+      await user.click(screen.getByTestId('char-step-next'));
+    }
+  };
+
   it('name dice appears in create mode only and fills the name', async () => {
     const user = userEvent.setup();
     renderCharacters();
@@ -1002,8 +1053,14 @@ describe('Character form randomizer + seed toggle', () => {
     await user.click(screen.getByTestId('char-randomize'));
 
     expect((screen.getByTestId('char-name') as HTMLInputElement).value).not.toBe('');
-    expect(field('Description').value).toMatch(/^an? /);
+    await nextStep(user);
+    expect(field('Positive prompt').value).toMatch(/^an? /);
+    // The negative prompt is a separate, clearly optional field on the same
+    // step; randomize does not invent one.
+    expect(field('Negative prompt (optional)').value).toBe('');
+    await nextStep(user);
     expect(field('Traits').value).not.toBe('');
+    await nextStep(user);
     expect(field('Trigger words').value).not.toBe('');
     // No confirm was needed — nothing of the user's was overwritten.
     expect(screen.queryByTestId('char-randomize-confirm')).not.toBeInTheDocument();
@@ -1013,15 +1070,18 @@ describe('Character form randomizer + seed toggle', () => {
     const user = userEvent.setup();
     renderCharacters();
     await user.click(screen.getByRole('button', { name: 'New character' }));
-    await user.type(field('Description'), 'my own concept');
+    await user.type(screen.getByTestId('char-name'), 'Mine');
+    await nextStep(user);
+    await user.type(field('Positive prompt'), 'my own concept');
 
     await user.click(screen.getByTestId('char-randomize'));
     // Confirm shows and nothing has changed yet.
     expect(await screen.findByTestId('char-randomize-confirm')).toBeInTheDocument();
-    expect(field('Description').value).toBe('my own concept');
+    expect(field('Positive prompt').value).toBe('my own concept');
 
     await user.click(screen.getByTestId('char-randomize-confirm'));
-    expect(field('Description').value).toMatch(/^an? /);
+    expect(field('Positive prompt').value).toMatch(/^an? /);
+    await user.click(screen.getByTestId('char-step-back'));
     expect((screen.getByTestId('char-name') as HTMLInputElement).value).not.toBe('');
   });
 
@@ -1029,6 +1089,8 @@ describe('Character form randomizer + seed toggle', () => {
     const user = userEvent.setup();
     renderCharacters();
     await user.click(screen.getByRole('button', { name: 'New character' }));
+    await user.type(screen.getByTestId('char-name'), 'Seedling');
+    await nextStep(user, 5);
 
     const toggle = screen.getByTestId('char-seed-toggle');
     expect(toggle).toHaveAttribute('role', 'switch');
@@ -1037,5 +1099,40 @@ describe('Character form randomizer + seed toggle', () => {
     await user.click(toggle);
     expect(toggle).toHaveAttribute('aria-checked', 'false');
     expect(toggle).toHaveTextContent('Varied');
+  });
+
+  it('character form is stepped, puts both prompts together, and omits stack selection', async () => {
+    const user = userEvent.setup();
+    renderCharacters();
+    await user.click(screen.getByRole('button', { name: 'New character' }));
+    await user.type(screen.getByTestId('char-name'), 'Stepper');
+
+    // One input on the first step, with its help directly below it.
+    expect(screen.getByTestId('char-step-indicator')).toHaveTextContent(
+      'Step 1 of 6 · Name',
+    );
+    expect(screen.getByText(/name shown on character cards/)).toBeInTheDocument();
+    expect(screen.queryByTestId('char-positive-prompt')).not.toBeInTheDocument();
+
+    // Positive + negative prompts share the next step. Negative is labeled
+    // optional and its help repeats that it can be left blank.
+    await nextStep(user);
+    expect(screen.getByTestId('char-step-indicator')).toHaveTextContent(
+      'Step 2 of 6 · Prompts',
+    );
+    expect(screen.getByTestId('char-positive-prompt')).toBeInTheDocument();
+    expect(screen.getByTestId('char-negative-prompt')).toBeInTheDocument();
+    expect(screen.getByText(/not required/)).toBeInTheDocument();
+
+    // No step offers a stack/default selection: characters are not linked to
+    // a stack ahead of a sheet run anymore.
+    for (let i = 0; i < 4; i++) {
+      await nextStep(user);
+      expect(screen.queryByText('Default stack')).not.toBeInTheDocument();
+      expect(screen.queryByText(/preferred stack/i)).not.toBeInTheDocument();
+    }
+    expect(screen.getByTestId('char-step-indicator')).toHaveTextContent(
+      'Step 6 of 6 · Seed policy',
+    );
   });
 });

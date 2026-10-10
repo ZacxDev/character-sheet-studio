@@ -1,4 +1,5 @@
-// Stacks screen: reusable checkpoint + LoRA combinations.
+// Stacks pages: reusable checkpoint + LoRA combinations, with separate
+// create/edit pages.
 //
 // A stack is picked through the HOST's native pickers (the block never browses
 // a catalog). Every pick is DISCOVERY ONLY — the server re-validates (public?
@@ -44,18 +45,23 @@ import {
 import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
 import { storeErrorMessage } from './common.js';
 
+type EditorState = { mode: 'create' } | { mode: 'edit'; id: string } | null;
+
 export interface StacksProps {
   library: SheetLibrary;
-  /** Open the create editor on arrival (the Builder sent the viewer here). */
-  autoOpenCreate?: boolean;
-  onAutoOpenConsumed?: () => void;
+  /** Editor selected by the current page route, when the shell is routing. */
+  initialEditor?: EditorState;
+  /** The viewer asked to open the create/edit page. */
+  onEditorOpened?: (editor: Exclude<EditorState, null>) => void;
+  /** The editor page was closed without creating a stack. */
+  onEditorClosed?: () => void;
   /** A new stack was saved (create mode) — the return trip home. */
   onCreated?: (stackId: string) => void;
+  /** An existing stack was saved from its edit page. */
+  onEdited?: () => void;
   /** The create editor was closed without saving. */
   onCreateCancelled?: () => void;
 }
-
-type EditorState = { mode: 'create' } | { mode: 'edit'; id: string } | null;
 
 function defaultCheckpoint(): StackCheckpoint {
   return {
@@ -94,24 +100,21 @@ function loraFromPick(info: BlockResourceInfo): StackLora {
 
 export function Stacks({
   library,
-  autoOpenCreate,
-  onAutoOpenConsumed,
+  initialEditor,
+  onEditorOpened,
+  onEditorClosed,
   onCreated,
+  onEdited,
   onCreateCancelled,
 }: StacksProps) {
-  const [editor, setEditor] = useState<EditorState>(null);
+  const [editor, setEditor] = useState<EditorState>(initialEditor ?? null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  // Arriving from the Builder's "create a stack" detour: open the editor
-  // immediately so the trip feels like one step.
-  useEffect(() => {
-    if (autoOpenCreate) {
-      setEditor({ mode: 'create' });
-      onAutoOpenConsumed?.();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoOpenCreate]);
+  const openEditor = (next: Exclude<EditorState, null>) => {
+    setEditor(next);
+    onEditorOpened?.(next);
+  };
 
   // Sheet count per stack — what a delete would orphan.
   const sheetsByStack = new Map<string, number>();
@@ -126,45 +129,77 @@ export function Stacks({
     }
     setConfirmDeleteId(null);
     setDeleteError(null);
-    // A stack in use as a character's default keeps working — the builder
-    // resolves the stack id at sheet-creation time and warns if it's gone.
+    // Existing sheets keep their stack id and images even if the stack is
+    // deleted; they render with the stack labeled unknown.
     const err = await library.deleteStack(id);
     if (err) setDeleteError(storeErrorMessage(err));
   };
+
+  // Create/edit are their own pages, so the stack list is not rendered
+  // underneath an open editor.
+  if (editor) {
+    const editing =
+      editor.mode === 'edit'
+        ? library.stacks.find((s) => s.id === editor.id)
+        : undefined;
+    if (editor.mode === 'edit' && library.ready && !editing) {
+      return (
+        <Card>
+          <Stack gap="sm">
+            <p style={{ margin: 0, opacity: 0.75 }}>
+              That stack no longer exists.
+            </p>
+            <div>
+              <Button
+                size="sm"
+                onClick={() => {
+                  setEditor(null);
+                  onEditorClosed?.();
+                }}
+              >
+                Back to stacks
+              </Button>
+            </div>
+          </Stack>
+        </Card>
+      );
+    }
+
+    return (
+      <Stack gap="md">
+        {deleteError && <Alert color="error">{deleteError}</Alert>}
+        <StackEditor
+          key={editor.mode === 'edit' ? editor.id : 'create'}
+          initial={editing}
+          onClose={() => {
+            if (editor.mode === 'create') onCreateCancelled?.();
+            setEditor(null);
+            onEditorClosed?.();
+          }}
+          onSaved={(saved) => {
+            const wasCreate = editor.mode === 'create';
+            setEditor(null);
+            if (wasCreate) onCreated?.(saved.id);
+            else onEdited?.();
+          }}
+          saveStack={library.saveStack}
+        />
+      </Stack>
+    );
+  }
 
   return (
     <Stack gap="md">
       <Group justify="space-between" align="center">
         <h2 style={{ margin: 0, fontSize: 20 }}>Stacks</h2>
-        <Button size="sm" onClick={() => setEditor({ mode: 'create' })}>
+        <Button size="sm" onClick={() => openEditor({ mode: 'create' })}>
           New stack
         </Button>
       </Group>
 
       {deleteError && <Alert color="error">{deleteError}</Alert>}
 
-      {editor && (
-        <StackEditor
-          key={editor.mode === 'edit' ? editor.id : 'create'}
-          initial={
-            editor.mode === 'edit'
-              ? library.stacks.find((s) => s.id === editor.id)
-              : undefined
-          }
-          onClose={() => {
-            if (editor.mode === 'create') onCreateCancelled?.();
-            setEditor(null);
-          }}
-          onSaved={(saved) => {
-            const wasCreate = editor.mode === 'create';
-            setEditor(null);
-            if (wasCreate) onCreated?.(saved.id);
-          }}
-          saveStack={library.saveStack}
-        />
-      )}
-
-      {library.stacks.length === 0 && !editor && (
+      {library.stacks.length === 0 && (
         <Card>
           <p style={{ margin: 0, opacity: 0.75 }}>
             No stacks yet. A stack is a checkpoint plus up to five LoRAs with
@@ -194,7 +229,7 @@ export function Stacks({
                 </Group>
               </div>
               <Group gap="xs" wrap>
-                <Button size="sm" variant="subtle" onClick={() => setEditor({ mode: 'edit', id: s.id })}>
+                <Button size="sm" variant="subtle" onClick={() => openEditor({ mode: 'edit', id: s.id })}>
                   Edit
                 </Button>
                 <Button

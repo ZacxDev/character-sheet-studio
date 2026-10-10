@@ -1,4 +1,4 @@
-// Characters screen: the cast list + the character editor.
+// Characters pages: the cast list, plus separate create/edit pages.
 //
 // A character is the reusable identity a sheet is built from — description,
 // traits, trigger words, negative prompt, an optional reference portrait
@@ -13,7 +13,6 @@ import {
   Button,
   Card,
   Group,
-  Select,
   Stack,
   TextInput,
   Textarea,
@@ -22,7 +21,6 @@ import {
 import type {
   Character,
   CharacterRefImage,
-  ModelStack,
   SeedPolicy,
 } from '../sheet/types.js';
 import { newCharacter } from '../sheet/types.js';
@@ -30,22 +28,27 @@ import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
 import { parseListInput, storeErrorMessage } from './common.js';
 import { randomCharacter, randomName } from './random-character.js';
 
+type EditorState = { mode: 'create' } | { mode: 'edit'; id: string } | null;
+
 export interface CharactersProps {
   library: SheetLibrary;
   /** Jump to the Sheet Builder with this character preselected. */
   onBuildSheet: (characterId: string) => void;
-  /** Jump to the Sheets tab filtered to this character's sheets. */
+  /** Jump to the Sheets page filtered to this character's sheets. */
   onViewSheets: (characterId: string) => void;
-  /** Open the create editor on arrival (the Builder sent the viewer here). */
-  autoOpenCreate?: boolean;
-  onAutoOpenConsumed?: () => void;
+  /** Editor selected by the current page route, when the shell is routing. */
+  initialEditor?: EditorState;
+  /** The viewer asked to open the create/edit page. */
+  onEditorOpened?: (editor: Exclude<EditorState, null>) => void;
+  /** The editor page was closed without creating a character. */
+  onEditorClosed?: () => void;
   /** A new character was saved (create mode) — the return trip home. */
   onCreated?: (characterId: string) => void;
+  /** An existing character was saved from its edit page. */
+  onEdited?: () => void;
   /** The create editor was closed without saving. */
   onCreateCancelled?: () => void;
 }
-
-type EditorState = { mode: 'create' } | { mode: 'edit'; id: string } | null;
 
 function seedPolicyLabel(p: SeedPolicy): string {
   return p === 'locked' ? 'Locked (reproducible)' : 'Varied (random per panel)';
@@ -215,24 +218,21 @@ export function Characters({
   library,
   onBuildSheet,
   onViewSheets,
-  autoOpenCreate,
-  onAutoOpenConsumed,
+  initialEditor,
+  onEditorOpened,
+  onEditorClosed,
   onCreated,
+  onEdited,
   onCreateCancelled,
 }: CharactersProps) {
-  const [editor, setEditor] = useState<EditorState>(null);
+  const [editor, setEditor] = useState<EditorState>(initialEditor ?? null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  // Arriving from the Builder's "create a character" detour: open the
-  // editor immediately so the trip feels like one step.
-  useEffect(() => {
-    if (autoOpenCreate) {
-      setEditor({ mode: 'create' });
-      onAutoOpenConsumed?.();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoOpenCreate]);
+  const openEditor = (next: Exclude<EditorState, null>) => {
+    setEditor(next);
+    onEditorOpened?.(next);
+  };
 
   const editing: Character | undefined =
     editor?.mode === 'edit'
@@ -275,36 +275,68 @@ export function Characters({
     if (err) setDeleteError(storeErrorMessage(err));
   };
 
+  // Create/edit are their own pages: when one is open, the cast list is not
+  // rendered underneath it. That keeps each route to one job and lets the
+  // host's Back action return to the list page.
+  if (editor) {
+    if (editor.mode === 'edit' && library.ready && !editing) {
+      return (
+        <Card>
+          <Stack gap="sm">
+            <p style={{ margin: 0, opacity: 0.75 }}>
+              That character no longer exists.
+            </p>
+            <div>
+              <Button
+                size="sm"
+                onClick={() => {
+                  setEditor(null);
+                  onEditorClosed?.();
+                }}
+              >
+                Back to characters
+              </Button>
+            </div>
+          </Stack>
+        </Card>
+      );
+    }
+
+    return (
+      <Stack gap="md">
+        {deleteError && <Alert color="error">{deleteError}</Alert>}
+        <CharacterEditor
+          key={editor.mode === 'edit' ? editor.id : 'create'}
+          initial={editing}
+          onClose={() => {
+            if (editor.mode === 'create') onCreateCancelled?.();
+            setEditor(null);
+            onEditorClosed?.();
+          }}
+          onSaved={(saved) => {
+            const wasCreate = editor.mode === 'create';
+            setEditor(null);
+            if (wasCreate) onCreated?.(saved.id);
+            else onEdited?.();
+          }}
+          saveCharacter={library.saveCharacter}
+        />
+      </Stack>
+    );
+  }
+
   return (
     <Stack gap="md">
       <Group justify="space-between" align="center">
         <h2 style={{ margin: 0, fontSize: 20 }}>Characters</h2>
-        <Button size="sm" onClick={() => setEditor({ mode: 'create' })}>
+        <Button size="sm" onClick={() => openEditor({ mode: 'create' })}>
           New character
         </Button>
       </Group>
 
       {deleteError && <Alert color="error">{deleteError}</Alert>}
 
-      {editor && (
-        <CharacterEditor
-          key={editor.mode === 'edit' ? editor.id : 'create'}
-          initial={editing}
-          stacks={library.stacks}
-          onClose={() => {
-            if (editor.mode === 'create') onCreateCancelled?.();
-            setEditor(null);
-          }}
-          onSaved={(saved) => {
-            const wasCreate = editor.mode === 'create';
-            setEditor(null);
-            if (wasCreate) onCreated?.(saved.id);
-          }}
-          saveCharacter={library.saveCharacter}
-        />
-      )}
-
-      {library.characters.length === 0 && !editor && (
+      {library.characters.length === 0 && (
         <Card>
           <p style={{ margin: 0, opacity: 0.75 }}>
             No characters yet. Create one — give it a description, some traits,
@@ -360,7 +392,7 @@ export function Characters({
                   <SeedPolicyInfo policy={c.seedPolicy} />
                   <CharacterMenu
                     name={c.name}
-                    onEdit={() => setEditor({ mode: 'edit', id: c.id })}
+                    onEdit={() => openEditor({ mode: 'edit', id: c.id })}
                     onDelete={() => askDelete(c.id)}
                   />
                 </Group>
@@ -417,26 +449,40 @@ export function Characters({
 
 interface EditorProps {
   initial?: Character;
-  stacks: ModelStack[];
   onClose: () => void;
   onSaved: (saved: Character) => void;
   saveCharacter: SheetLibrary['saveCharacter'];
 }
 
-function CharacterEditor({ initial, stacks, onClose, onSaved, saveCharacter }: EditorProps) {
+const CHARACTER_STEPS = [
+  'Name',
+  'Prompts',
+  'Traits',
+  'Trigger words',
+  'Reference portrait',
+  'Seed policy',
+] as const;
+
+function FieldHelp({ children }: { children: string }) {
+  return (
+    <div style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.68 }}>{children}</div>
+  );
+}
+
+function CharacterEditor({ initial, onClose, onSaved, saveCharacter }: EditorProps) {
   const [name, setName] = useState(initial?.name ?? '');
   const [description, setDescription] = useState(initial?.description ?? '');
   const [traits, setTraits] = useState((initial?.traits ?? []).join(', '));
   const [triggerWords, setTriggerWords] = useState((initial?.triggerWords ?? []).join(', '));
   const [negativePrompt, setNegativePrompt] = useState(initial?.negativePrompt ?? '');
   const [seedPolicy, setSeedPolicy] = useState<SeedPolicy>(initial?.seedPolicy ?? 'locked');
-  const [defaultStackId, setDefaultStackId] = useState(initial?.defaultStackId ?? '');
   const [refImage, setRefImage] = useState<CharacterRefImage | undefined>(initial?.referenceImage);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
   const [confirmRandomize, setConfirmRandomize] = useState(false);
+  const [step, setStep] = useState(0);
 
   const isCreate = !initial;
 
@@ -486,7 +532,12 @@ function CharacterEditor({ initial, stacks, onClose, onSaved, saveCharacter }: E
 
   const onSave = async () => {
     setTouched(true);
-    if (name.trim() === '') return;
+    if (name.trim() === '') {
+      // The name lives on step one; take the viewer back to the field that
+      // needs attention instead of leaving the error stranded on the last step.
+      setStep(0);
+      return;
+    }
     setSaving(true);
     setError(null);
     const now = new Date().toISOString();
@@ -499,7 +550,6 @@ function CharacterEditor({ initial, stacks, onClose, onSaved, saveCharacter }: E
           triggerWords: parseListInput(triggerWords),
           negativePrompt: negativePrompt.trim(),
           seedPolicy,
-          defaultStackId: defaultStackId || undefined,
           updatedAt: now,
         }
       : newCharacter({
@@ -509,8 +559,10 @@ function CharacterEditor({ initial, stacks, onClose, onSaved, saveCharacter }: E
           triggerWords: parseListInput(triggerWords),
           negativePrompt: negativePrompt.trim(),
           seedPolicy,
-          ...(defaultStackId ? { defaultStackId } : {}),
         });
+    // Characters no longer carry a preselected stack: the stack is chosen in
+    // the Sheet Builder for each run, so any legacy link is dropped on save.
+    delete char.defaultStackId;
     // A removed portrait must not linger as an explicit `undefined` key.
     if (refImage) char.referenceImage = refImage;
     else delete char.referenceImage;
@@ -521,6 +573,16 @@ function CharacterEditor({ initial, stacks, onClose, onSaved, saveCharacter }: E
       return;
     }
     onSaved(char);
+  };
+
+  const lastStep = CHARACTER_STEPS.length - 1;
+  const goBack = () => setStep((s) => Math.max(0, s - 1));
+  const goNext = () => {
+    if (step === 0 && name.trim() === '') {
+      setTouched(true);
+      return;
+    }
+    setStep((s) => Math.min(lastStep, s + 1));
   };
 
   return (
@@ -574,127 +636,208 @@ function CharacterEditor({ initial, stacks, onClose, onSaved, saveCharacter }: E
 
         {error && <Alert color="error">{error}</Alert>}
 
-        <Group gap="xs" align="flex-end" wrap={false}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <TextInput
-              label="Name"
-              placeholder="Nyx"
-              value={name}
-              onChange={(e) => setName(e.currentTarget.value)}
-              error={nameError}
-              data-testid="char-name"
-            />
-          </div>
-          {isCreate && (
-            <button
-              type="button"
-              className="css-icon-btn"
-              style={{ width: 34, height: 34 }}
-              aria-label="Random name"
-              data-testid="char-name-dice"
-              onClick={() => setName(randomName())}
-            >
-              <DiceIcon />
-            </button>
-          )}
-        </Group>
-        <Textarea
-          label="Description"
-          placeholder="a cyberpunk fox mercenary, lean build, …"
-          value={description}
-          onChange={(e) => setDescription(e.currentTarget.value)}
-          rows={3}
-        />
-        <TextInput
-          label="Traits (comma-separated)"
-          placeholder="silver-streaked fur, glowing amber eyes"
-          value={traits}
-          onChange={(e) => setTraits(e.currentTarget.value)}
-        />
-        <TextInput
-          label="Trigger words (comma-separated)"
-          placeholder="nyx_fox"
-          value={triggerWords}
-          onChange={(e) => setTriggerWords(e.currentTarget.value)}
-        />
-        <div style={{ fontSize: 12, opacity: 0.65, marginTop: -6 }}>
-          Words that switch on this character’s look (usually from their
-          LoRA) — they’re added to every prompt for this character.
+        <div
+          style={{ fontSize: 13, fontWeight: 600, opacity: 0.72 }}
+          data-testid="char-step-indicator"
+        >
+          Step {step + 1} of {CHARACTER_STEPS.length} · {CHARACTER_STEPS[step]}
         </div>
-        <Textarea
-          label="Negative prompt"
-          placeholder="blurry, watermark, deformed"
-          value={negativePrompt}
-          onChange={(e) => setNegativePrompt(e.currentTarget.value)}
-          rows={2}
-        />
 
-        <Group gap="md" align="flex-end">
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>
-              Seed policy
-            </div>
-            <Button
-              variant="light"
-              role="switch"
-              aria-checked={seedPolicy === 'locked'}
-              aria-label="Seed policy"
-              data-testid="char-seed-toggle"
-              onClick={() =>
-                setSeedPolicy((p) => (p === 'locked' ? 'varied' : 'locked'))
-              }
-            >
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-                {seedPolicy === 'locked' ? <LockIcon /> : <ShuffleIcon />}
-                {seedPolicyLabel(seedPolicy)}
-              </span>
-            </Button>
-          </div>
-          <Select
-            label="Default stack"
-            value={defaultStackId}
-            onChange={(v) => setDefaultStackId(v ?? '')}
-            options={[
-              { value: '', label: 'None' },
-              ...stacks.map((s) => ({ value: s.id, label: s.name })),
-            ]}
-          />
-        </Group>
-
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>
-            Reference portrait (optional)
-          </div>
-          <Group gap="sm" align="center">
-            {refImage ? (
-              <>
-                <img
-                  src={refImage.url}
-                  alt="Reference portrait"
-                  width={72}
-                  height={72}
-                  style={{ borderRadius: 8, objectFit: 'cover' }}
+        {step === 0 && (
+          <Stack gap="xs">
+            <Group gap="xs" align="flex-end" wrap={false}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <TextInput
+                  label="Name"
+                  placeholder="Nyx"
+                  value={name}
+                  onChange={(e) => setName(e.currentTarget.value)}
+                  error={nameError}
+                  data-testid="char-name"
                 />
-                <Button size="sm" variant="subtle" color="red" onClick={() => setRefImage(undefined)}>
-                  Remove
-                </Button>
-              </>
-            ) : (
-              <Button size="sm" variant="light" loading={uploading} onClick={() => void onUpload()}>
-                Upload portrait
-              </Button>
-            )}
-          </Group>
-          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 4 }}>
-            Used as an img2img source when you enable it on a sheet — kept
-            private, never published.
-          </div>
-        </div>
+              </div>
+              {isCreate && (
+                <button
+                  type="button"
+                  className="css-icon-btn"
+                  style={{ width: 34, height: 34 }}
+                  aria-label="Random name"
+                  data-testid="char-name-dice"
+                  onClick={() => setName(randomName())}
+                >
+                  <DiceIcon />
+                </button>
+              )}
+            </Group>
+            <FieldHelp>
+              The name shown on character cards and sheets. A short, distinct
+              name is easiest to scan.
+            </FieldHelp>
+          </Stack>
+        )}
 
-        <Group justify="flex-end">
-          <Button onClick={() => void onSave()} loading={saving} data-testid="char-save">
-            Save character
-          </Button>
+        {step === 1 && (
+          <Stack gap="sm">
+            <Stack gap="xs">
+              <Textarea
+                label="Positive prompt"
+                placeholder="a cyberpunk fox mercenary, lean build, …"
+                value={description}
+                onChange={(e) => setDescription(e.currentTarget.value)}
+                rows={3}
+                data-testid="char-positive-prompt"
+              />
+              <FieldHelp>
+                Describe the character and the look you want. This text starts
+                every panel prompt for this character.
+              </FieldHelp>
+            </Stack>
+            <Stack gap="xs">
+              <Textarea
+                label="Negative prompt (optional)"
+                placeholder="blurry, watermark, deformed"
+                value={negativePrompt}
+                onChange={(e) => setNegativePrompt(e.currentTarget.value)}
+                rows={2}
+                data-testid="char-negative-prompt"
+              />
+              <FieldHelp>
+                Optional — list anything to keep out of the images. Leave this
+                blank if you do not need one; it is not required.
+              </FieldHelp>
+            </Stack>
+          </Stack>
+        )}
+
+        {step === 2 && (
+          <Stack gap="xs">
+            <TextInput
+              label="Traits (comma-separated)"
+              placeholder="silver-streaked fur, glowing amber eyes"
+              value={traits}
+              onChange={(e) => setTraits(e.currentTarget.value)}
+              data-testid="char-traits"
+            />
+            <FieldHelp>
+              Fixed details that should stay consistent, separated by commas —
+              species, hair, eyes, markings, or signature clothing.
+            </FieldHelp>
+          </Stack>
+        )}
+
+        {step === 3 && (
+          <Stack gap="xs">
+            <TextInput
+              label="Trigger words (comma-separated)"
+              placeholder="nyx_fox"
+              value={triggerWords}
+              onChange={(e) => setTriggerWords(e.currentTarget.value)}
+              data-testid="char-trigger-words"
+            />
+            <FieldHelp>
+              Words that switch on this character’s look, usually from their
+              LoRA. They are added to every prompt for this character.
+            </FieldHelp>
+          </Stack>
+        )}
+
+        {step === 4 && (
+          <Stack gap="xs">
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>
+                Reference portrait (optional)
+              </div>
+              <Group gap="sm" align="center">
+                {refImage ? (
+                  <>
+                    <img
+                      src={refImage.url}
+                      alt="Reference portrait"
+                      width={72}
+                      height={72}
+                      style={{ borderRadius: 8, objectFit: 'cover' }}
+                    />
+                    <Button
+                      size="sm"
+                      variant="subtle"
+                      color="red"
+                      onClick={() => setRefImage(undefined)}
+                    >
+                      Remove
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="light"
+                    loading={uploading}
+                    onClick={() => void onUpload()}
+                  >
+                    Upload portrait
+                  </Button>
+                )}
+              </Group>
+            </div>
+            <FieldHelp>
+              Used as an img2img source when you enable it on a sheet. It is
+              kept private and never published.
+            </FieldHelp>
+          </Stack>
+        )}
+
+        {step === 5 && (
+          <Stack gap="xs">
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>
+                Seed policy
+              </div>
+              <Button
+                variant="light"
+                role="switch"
+                aria-checked={seedPolicy === 'locked'}
+                aria-label="Seed policy"
+                data-testid="char-seed-toggle"
+                onClick={() =>
+                  setSeedPolicy((p) => (p === 'locked' ? 'varied' : 'locked'))
+                }
+              >
+                <span
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}
+                >
+                  {seedPolicy === 'locked' ? <LockIcon /> : <ShuffleIcon />}
+                  {seedPolicyLabel(seedPolicy)}
+                </span>
+              </Button>
+            </div>
+            <FieldHelp>{SEED_POLICY_EXPLAINER[seedPolicy]}</FieldHelp>
+          </Stack>
+        )}
+
+        <Group justify="space-between" align="center">
+          {step > 0 ? (
+            <Button
+              variant="subtle"
+              onClick={goBack}
+              data-testid="char-step-back"
+            >
+              Back
+            </Button>
+          ) : (
+            <span />
+          )}
+          {step < lastStep ? (
+            <Button onClick={goNext} data-testid="char-step-next">
+              Next
+            </Button>
+          ) : (
+            <Button
+              onClick={() => void onSave()}
+              loading={saving}
+              data-testid="char-save"
+            >
+              Save character
+            </Button>
+          )}
         </Group>
       </Stack>
     </Card>

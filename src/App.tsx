@@ -1,11 +1,14 @@
 // Character Sheet Studio — app shell.
 //
-// Four tabs: Characters → Stacks → Sheet Builder → Sheets. The library hook
-// sits at the top so every screen shares one hydrated store. Anonymous viewers
-// can browse everything; each screen gates its own spend behind sign-in +
-// consent.
+// The host owns the page history, so the four sections and their detail
+// screens are routes below the app root rather than local tab state:
+// Characters, Stacks, Sheet Builder, Sheets, plus create/edit and sheet
+// detail pages. That is what lets Android/browser Back move within the app
+// instead of leaving it. The library hook sits at the top so every page
+// shares one hydrated store. Anonymous viewers can browse everything; each
+// screen gates its own spend behind sign-in + consent.
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { useBlockContext, useBlockResize, useRequestSignIn } from '@civitai/blocks-react';
 import {
@@ -24,99 +27,129 @@ import { Characters } from './screens/Characters.js';
 import { Stacks } from './screens/Stacks.js';
 import { SheetBuilder } from './screens/SheetBuilder.js';
 import { SheetView } from './screens/SheetView.js';
+import {
+  builderRoute,
+  characterCreateRoute,
+  characterEditRoute,
+  parseAppRoute,
+  sheetRoute,
+  sheetsRoute,
+  stackCreateRoute,
+  stackEditRoute,
+  useAppRoute,
+  type AppRoute,
+} from './platform/route.js';
 
 // Inject the W6 component pack's stylesheet at module init (before first paint)
 // to avoid the documented one-frame FOUC. Idempotent.
 injectBlocksStyles();
 
-type Tab = 'characters' | 'stacks' | 'builder' | 'sheets';
+type NavSection = 'characters' | 'stacks' | 'builder' | 'sheets';
 
-const TABS: Array<{ value: Tab; label: string }> = [
-  { value: 'characters', label: 'Characters' },
-  { value: 'stacks', label: 'Stacks' },
-  { value: 'builder', label: 'Sheet Builder' },
-  { value: 'sheets', label: 'Sheets' },
+const NAV_ITEMS: Array<{ section: NavSection; label: string; route: string }> = [
+  { section: 'characters', label: 'Characters', route: 'characters' },
+  { section: 'stacks', label: 'Stacks', route: 'stacks' },
+  { section: 'builder', label: 'Sheet Builder', route: 'builder' },
+  { section: 'sheets', label: 'Sheets', route: 'sheets' },
 ];
+
+function navSectionForRoute(route: AppRoute): NavSection {
+  switch (route.name) {
+    case 'characters':
+    case 'character-create':
+    case 'character-edit':
+      return 'characters';
+    case 'stacks':
+    case 'stack-create':
+    case 'stack-edit':
+      return 'stacks';
+    case 'builder':
+      return 'builder';
+    case 'sheets':
+    case 'sheet':
+      return 'sheets';
+  }
+}
 
 export function App() {
   const { ready, viewer, theme } = useBlockContext();
   const { requestSignIn } = useRequestSignIn();
   const library = useSheetLibrary();
+  const { subPath, navigateTo } = useAppRoute();
+  const route = parseAppRoute(subPath);
+  const activeNav = navSectionForRoute(route);
 
   const rootRef = useRef<HTMLDivElement>(null);
   useBlockResize(rootRef);
 
-  // TEMPORARY screenshot rig — reverted after screenshots are captured.
-  const [tab, setTab] = useState<Tab>(() => {
-    const t = new URLSearchParams(window.location.search).get('tab');
-    return t === 'stacks' || t === 'builder' || t === 'sheets' ? t : 'characters';
-  });
-  const [openSheetId, setOpenSheetId] = useState<string | null>(null);
-  // When set, the Sheets tab lists only this character's sheets.
-  const [sheetsCharFilter, setSheetsCharFilter] = useState<string | null>(null);
-  const [preselectedCharacterId, setPreselectedCharacterId] = useState<string | undefined>(
-    undefined,
-  );
+  // On narrow screens the section nav becomes a horizontal strip. Keep the
+  // current page's item in view when a route change selects an off-screen
+  // section (for example, opening a sheet from a deep link).
+  useEffect(() => {
+    const centerActiveNav = () => {
+      const nav = rootRef.current?.querySelector<HTMLElement>('.css-sidenav');
+      const active = nav?.querySelector<HTMLElement>('[aria-current="page"]');
+      if (!nav || !active) return;
+      nav.scrollLeft = Math.max(
+        0,
+        active.offsetLeft - (nav.clientWidth - active.clientWidth) / 2,
+      );
+    };
+    centerActiveNav();
+    window.addEventListener('resize', centerActiveNav);
+    return () => window.removeEventListener('resize', centerActiveNav);
+  }, [activeNav, route.name]);
+
   // Return-trip state: when the Builder sends the viewer off to create a
   // character/stack, saving there lands them back in the Builder with the
-  // new entry selected, instead of stranded on a list screen.
-  const [charAutoCreate, setCharAutoCreate] = useState(false);
-  const [stackAutoCreate, setStackAutoCreate] = useState(false);
+  // new entry selected, instead of stranded on a list page.
   const [returnToBuilder, setReturnToBuilder] = useState<'character' | 'stack' | null>(null);
+  const [builderCharacterId, setBuilderCharacterId] = useState<string | undefined>(undefined);
   const [builderStackId, setBuilderStackId] = useState<string | undefined>(undefined);
 
   const anon = ready && !viewer;
 
   const goToBuilder = (characterId?: string) => {
-    setPreselectedCharacterId(characterId);
-    setOpenSheetId(null);
-    setTab('builder');
+    setBuilderCharacterId(characterId);
+    navigateTo(builderRoute(characterId));
   };
 
   const viewSheetsFor = (characterId: string) => {
-    setSheetsCharFilter(characterId);
-    setOpenSheetId(null);
-    setTab('sheets');
+    navigateTo(sheetsRoute(characterId));
   };
 
   const openSheet = (sheetId: string) => {
-    setOpenSheetId(sheetId);
-    setTab('sheets');
+    navigateTo(sheetRoute(sheetId));
   };
 
-  const selectTab = (v: Tab) => {
-    setTab(v);
-    if (v !== 'sheets') setOpenSheetId(null);
-    // Manual navigation resets the character drill-in — the filter only
-    // exists as a target from a character card.
-    setSheetsCharFilter(null);
-  };
+  const characterEditor =
+    route.name === 'character-create'
+      ? { mode: 'create' as const }
+      : route.name === 'character-edit'
+        ? { mode: 'edit' as const, id: route.characterId }
+        : null;
+
+  const stackEditor =
+    route.name === 'stack-create'
+      ? { mode: 'create' as const }
+      : route.name === 'stack-edit'
+        ? { mode: 'edit' as const, id: route.stackId }
+        : null;
 
   return (
     <div ref={rootRef} className="css-root css-shell" data-theme={theme}>
       <div className="css-layout">
         <nav className="css-sidenav" aria-label="App sections">
-          {TABS.map((t) => (
+          {NAV_ITEMS.map((item) => (
             <button
-              key={t.value}
+              key={item.section}
               type="button"
-              role="tab"
-              aria-selected={tab === t.value}
-              data-value={t.value}
+              aria-current={activeNav === item.section ? 'page' : undefined}
+              data-value={item.section}
               className="css-nav-item"
-              onClick={() => {
-                // Clicking the ALREADY-active Sheets item fires no tab
-                // change, but the viewer means "back to the list" — exit
-                // the open sheet / drill-in instead of doing nothing.
-                if (tab === 'sheets' && t.value === 'sheets') {
-                  setOpenSheetId(null);
-                  setSheetsCharFilter(null);
-                  return;
-                }
-                selectTab(t.value);
-              }}
+              onClick={() => navigateTo(item.route)}
             >
-              {t.label}
+              {item.label}
             </button>
           ))}
           <div className="css-nav-spacer" />
@@ -136,73 +169,105 @@ export function App() {
               </Alert>
             )}
 
-        {tab === 'characters' && (
-          <Characters
-            library={library}
-            onBuildSheet={goToBuilder}
-            onViewSheets={viewSheetsFor}
-            autoOpenCreate={charAutoCreate}
-            onAutoOpenConsumed={() => setCharAutoCreate(false)}
-            onCreated={(id) => {
-              if (returnToBuilder !== 'character') return;
-              setReturnToBuilder(null);
-              goToBuilder(id);
-            }}
-            onCreateCancelled={() => {
-              if (returnToBuilder === 'character') setReturnToBuilder(null);
-            }}
-          />
-        )}
-        {tab === 'stacks' && (
-          <Stacks
-            library={library}
-            autoOpenCreate={stackAutoCreate}
-            onAutoOpenConsumed={() => setStackAutoCreate(false)}
-            onCreated={(id) => {
-              if (returnToBuilder !== 'stack') return;
-              setReturnToBuilder(null);
-              setBuilderStackId(id);
-              setTab('builder');
-            }}
-            onCreateCancelled={() => {
-              if (returnToBuilder === 'stack') setReturnToBuilder(null);
-            }}
-          />
-        )}
-        {tab === 'builder' && (
-          <SheetBuilder
-            library={library}
-            preselectedCharacterId={preselectedCharacterId ?? null}
-            preselectedStackId={builderStackId ?? null}
-            onOpenSheet={openSheet}
-            onCreateStack={() => {
-              setReturnToBuilder('stack');
-              setStackAutoCreate(true);
-              setTab('stacks');
-            }}
-            onCreateCharacter={() => {
-              setReturnToBuilder('character');
-              setCharAutoCreate(true);
-              setTab('characters');
-            }}
-          />
-        )}
-        {tab === 'sheets' &&
-          (openSheetId ? (
-            <SheetView
-              library={library}
-              sheetId={openSheetId}
-              onBack={() => setOpenSheetId(null)}
-            />
-          ) : (
-            <SheetsList
-              library={library}
-              onOpen={openSheet}
-              onBuild={(characterId) => goToBuilder(characterId)}
-              filterCharacterId={sheetsCharFilter}
-              onClearFilter={() => setSheetsCharFilter(null)}
-            />
-          ))}
+            {(route.name === 'characters' ||
+              route.name === 'character-create' ||
+              route.name === 'character-edit') && (
+              <Characters
+                key={subPath || 'characters'}
+                library={library}
+                onBuildSheet={goToBuilder}
+                onViewSheets={viewSheetsFor}
+                initialEditor={characterEditor}
+                onEditorOpened={(editor) =>
+                  navigateTo(
+                    editor.mode === 'create'
+                      ? characterCreateRoute()
+                      : characterEditRoute(editor.id),
+                  )
+                }
+                onEditorClosed={() => navigateTo('characters')}
+                onCreated={(id) => {
+                  if (returnToBuilder !== 'character') {
+                    navigateTo('characters');
+                    return;
+                  }
+                  setReturnToBuilder(null);
+                  goToBuilder(id);
+                }}
+                onEdited={() => navigateTo('characters')}
+                onCreateCancelled={() => {
+                  if (returnToBuilder === 'character') setReturnToBuilder(null);
+                }}
+              />
+            )}
+
+            {(route.name === 'stacks' ||
+              route.name === 'stack-create' ||
+              route.name === 'stack-edit') && (
+              <Stacks
+                key={subPath || 'stacks'}
+                library={library}
+                initialEditor={stackEditor}
+                onEditorOpened={(editor) =>
+                  navigateTo(
+                    editor.mode === 'create'
+                      ? stackCreateRoute()
+                      : stackEditRoute(editor.id),
+                  )
+                }
+                onEditorClosed={() => navigateTo('stacks')}
+                onCreated={(id) => {
+                  if (returnToBuilder !== 'stack') {
+                    navigateTo('stacks');
+                    return;
+                  }
+                  setReturnToBuilder(null);
+                  setBuilderStackId(id);
+                  navigateTo(builderRoute(builderCharacterId));
+                }}
+                onEdited={() => navigateTo('stacks')}
+                onCreateCancelled={() => {
+                  if (returnToBuilder === 'stack') setReturnToBuilder(null);
+                }}
+              />
+            )}
+
+            {route.name === 'builder' && (
+              <SheetBuilder
+                library={library}
+                preselectedCharacterId={route.characterId ?? null}
+                preselectedStackId={builderStackId ?? null}
+                onOpenSheet={openSheet}
+                onCreateStack={(characterId) => {
+                  setReturnToBuilder('stack');
+                  setBuilderCharacterId(characterId || undefined);
+                  navigateTo(stackCreateRoute());
+                }}
+                onCreateCharacter={() => {
+                  setReturnToBuilder('character');
+                  navigateTo(characterCreateRoute());
+                }}
+              />
+            )}
+
+            {route.name === 'sheets' && (
+              <SheetsList
+                library={library}
+                onOpen={openSheet}
+                onBuild={(characterId) => goToBuilder(characterId)}
+                filterCharacterId={route.characterId ?? null}
+                onClearFilter={() => navigateTo(sheetsRoute())}
+              />
+            )}
+
+            {route.name === 'sheet' && (
+              <SheetView
+                key={route.sheetId}
+                library={library}
+                sheetId={route.sheetId}
+                onBack={() => navigateTo(sheetsRoute())}
+              />
+            )}
           </Stack>
         </main>
       </div>
