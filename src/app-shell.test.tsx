@@ -38,7 +38,7 @@ describe('App shell smoke test', () => {
       ).toBeInTheDocument(),
     );
 
-    // The custom "Indigo Lineup" theme scope rides on the app root.
+    // The custom "Rose Noir" theme scope rides on the app root.
     expect(document.querySelector('.css-root')).not.toBeNull();
     for (const page of ['Characters', 'Stacks', 'Sheet Builder', 'Sheets']) {
       expect(

@@ -36,73 +36,69 @@ button:focus-visible {
 }
 
 /* ---------------------------------------------------------------------------
-   Character Sheet Studio theme — "Indigo Lineup", quieted.
+   Character Sheet Studio theme — "Rose Noir".
 
-   The hue family is sampled from the store listing media (deep-indigo
-   field #1c0c51, electric-cyan frames #00dcfc, steel-teal figure work,
-   pale lavender-white #d1dae4), but the UI wears it muted: desaturated
-   slate-indigo surfaces and a softened cyan, so the artwork on the
-   listing pops harder than the chrome around the app. The components
-   read --civitai-* tokens, so the theme is a token REDEFINITION scoped
-   to the app root (.css-root), not new component CSS.
-   Dark is the BASE (the base rule below has no data-theme qualifier, so a
-   pre-init frame paints dark, matching the boot skeleton); light exists only
-   as the explicit [data-theme='light'] override the host can request.
+   Wine-dark surfaces with a rose accent: a moody, high-contrast dark-first
+   theme. Dark is the BASE (the base rule below has no data-theme qualifier,
+   so a pre-init frame paints dark, matching the boot skeleton); light exists
+   only as the explicit [data-theme='light'] override the host can request.
+   The components read --civitai-* tokens, so the theme is a token
+   REDEFINITION scoped to the app root (.css-root), not new component CSS.
    The [data-theme] forms out-rank the pack's own [data-theme] blocks
    (0,2,0 vs 0,1,0) so the theme wins regardless of stylesheet order.
    ------------------------------------------------------------------------- */
 .css-root,
 .css-root[data-theme='dark'] {
-  --civitai-color-body: #0e1016;
-  --civitai-color-surface: #151824;
-  --civitai-color-surface-2: #1d2133;
-  --civitai-color-border: #2a2e44;
-  --civitai-color-text: #eceef4;
-  --civitai-color-text-dimmed: #9ba1b6;
-  --civitai-color-primary: #46b1c9;
-  --civitai-color-primary-hover: #63c0d4;
-  --civitai-color-primary-fg: #06242e;
-  --civitai-color-primary-light: rgba(70, 177, 201, 0.12);
-  --civitai-color-info: #7ba7cc;
+  --civitai-color-body: #120d11;
+  --civitai-color-surface: #1a1216;
+  --civitai-color-surface-2: #251a21;
+  --civitai-color-border: #362730;
+  --civitai-color-text: #f4ecf0;
+  --civitai-color-text-dimmed: #b39daa;
+  --civitai-color-primary: #e5486c;
+  --civitai-color-primary-hover: #ef6584;
+  --civitai-color-primary-fg: #2b0713;
+  --civitai-color-primary-light: rgba(229, 72, 108, 0.14);
+  --civitai-color-info: #9bb8d8;
   --civitai-color-success: #57b87e;
-  --civitai-color-warning: #dfa244;
-  --civitai-color-error: #e26d74;
-  --civitai-color-gray-0: #f7f8fa;
-  --civitai-color-gray-1: #e9ebf1;
-  --civitai-color-gray-2: #d5d9e4;
-  --civitai-color-gray-3: #b6bccf;
-  --civitai-color-gray-4: #939bb4;
-  --civitai-color-gray-5: #747d97;
-  --civitai-color-gray-6: #5a6178;
-  --civitai-color-gray-7: #454b61;
-  --civitai-color-gray-8: #30364a;
-  --civitai-color-gray-9: #1f2334;
-  --civitai-color-segmented-bg: #1d2133;
-  --civitai-color-track: #1d2133;
-  --civitai-color-media-placeholder: #12141f;
+  --civitai-color-warning: #f0b429;
+  --civitai-color-error: #e5484d;
+  --civitai-color-gray-0: #faf7f9;
+  --civitai-color-gray-1: #f0e7ec;
+  --civitai-color-gray-2: #ddd0d8;
+  --civitai-color-gray-3: #c0aeb9;
+  --civitai-color-gray-4: #9c8694;
+  --civitai-color-gray-5: #7d6775;
+  --civitai-color-gray-6: #63505c;
+  --civitai-color-gray-7: #4c3d46;
+  --civitai-color-gray-8: #362730;
+  --civitai-color-gray-9: #251a21;
+  --civitai-color-segmented-bg: #251a21;
+  --civitai-color-track: #251a21;
+  --civitai-color-media-placeholder: #0b080a;
   --civitai-radius: 0.5rem;
   --civitai-font: 'Avenir Next', 'Segoe UI', system-ui, -apple-system, Roboto,
     Helvetica, Arial, sans-serif;
 }
 
 .css-root[data-theme='light'] {
-  --civitai-color-body: #f2f3f8;
+  --civitai-color-body: #f7f2f4;
   --civitai-color-surface: #ffffff;
-  --civitai-color-surface-2: #e8eaf2;
-  --civitai-color-border: #d3d7e4;
-  --civitai-color-text: #1e2233;
-  --civitai-color-text-dimmed: #5f6579;
-  --civitai-color-primary: #2b87a3;
-  --civitai-color-primary-hover: #237187;
+  --civitai-color-surface-2: #f3e9ee;
+  --civitai-color-border: #e4d3dc;
+  --civitai-color-text: #23141c;
+  --civitai-color-text-dimmed: #6f5a66;
+  --civitai-color-primary: #c2305c;
+  --civitai-color-primary-hover: #a6274f;
   --civitai-color-primary-fg: #ffffff;
-  --civitai-color-primary-light: rgba(43, 135, 163, 0.1);
+  --civitai-color-primary-light: rgba(229, 72, 108, 0.1);
   --civitai-color-info: #3e74a8;
   --civitai-color-success: #2c9464;
   --civitai-color-warning: #c07f1d;
   --civitai-color-error: #cf4453;
-  --civitai-color-segmented-bg: #e8eaf2;
-  --civitai-color-track: #e8eaf2;
-  --civitai-color-media-placeholder: #eceef5;
+  --civitai-color-segmented-bg: #f3e9ee;
+  --civitai-color-track: #f3e9ee;
+  --civitai-color-media-placeholder: #efe6ea;
 }
 
 /* Display type: model-sheet labels — a heavy grotesque, tight and stamped.
