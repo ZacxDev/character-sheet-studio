@@ -918,20 +918,15 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
 
   return (
     <Stack gap="md">
-      <Group justify="space-between" align="center">
-        <Button variant="subtle" onClick={onBack}>
-          ← All sheets
+      <Group justify="flex-end" align="center">
+        <Button
+          variant="subtle"
+          color="error"
+          onClick={() => void deleteSheet()}
+          onBlur={() => setConfirmDelete(false)}
+        >
+          {confirmDelete ? 'Confirm delete' : 'Delete'}
         </Button>
-        <Group gap="sm">
-          <Button
-            variant="subtle"
-            color="error"
-            onClick={() => void deleteSheet()}
-            onBlur={() => setConfirmDelete(false)}
-          >
-            {confirmDelete ? 'Confirm delete' : 'Delete'}
-          </Button>
-        </Group>
       </Group>
 
       <Card>

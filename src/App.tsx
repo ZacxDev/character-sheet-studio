@@ -25,6 +25,7 @@ import { useSheetLibrary } from './sheet/useSheetLibrary.js';
 import { SHEET_STATUS_LABEL } from './sheet/types.js';
 import { Characters } from './screens/Characters.js';
 import { CharacterView } from './screens/CharacterView.js';
+import { Breadcrumbs, type Crumb } from './screens/Breadcrumbs.js';
 import { Stacks } from './screens/Stacks.js';
 import { SheetBuilder } from './screens/SheetBuilder.js';
 import { SheetView } from './screens/SheetView.js';
@@ -81,6 +82,68 @@ export function App() {
   const { subPath, navigateTo } = useAppRoute();
   const route = parseAppRoute(subPath);
   const activeNav = navSectionForRoute(route);
+
+  // Breadcrumb trail for sub-pages — the easy way back up. Top-level
+  // sections get none; a crumb's label falls back gracefully while the
+  // library is still hydrating.
+  const crumbs: Crumb[] = (() => {
+    const charName = (id: string) =>
+      library.characters.find((c) => c.id === id)?.name ?? 'Character';
+    switch (route.name) {
+      case 'character':
+        return [
+          { label: 'Characters', path: 'characters' },
+          { label: charName(route.characterId) },
+        ];
+      case 'character-create':
+        return [{ label: 'Characters', path: 'characters' }, { label: 'New character' }];
+      case 'character-edit':
+        return [
+          { label: 'Characters', path: 'characters' },
+          { label: charName(route.characterId), path: characterRoute(route.characterId) },
+          { label: 'Edit' },
+        ];
+      case 'stack-create':
+        return [{ label: 'Stacks', path: 'stacks' }, { label: 'New stack' }];
+      case 'stack-edit':
+        return [
+          { label: 'Stacks', path: 'stacks' },
+          { label: library.stacks.find((s) => s.id === route.stackId)?.name ?? 'Stack' },
+          { label: 'Edit' },
+        ];
+      case 'builder':
+        return route.characterId
+          ? [
+              { label: 'Characters', path: 'characters' },
+              { label: charName(route.characterId), path: characterRoute(route.characterId) },
+              { label: 'New sheet' },
+            ]
+          : [];
+      case 'sheets':
+        return route.characterId
+          ? [
+              { label: 'Characters', path: 'characters' },
+              { label: charName(route.characterId), path: characterRoute(route.characterId) },
+              { label: 'Sheets' },
+            ]
+          : [];
+      case 'sheet': {
+        const sheet = library.sheets.find((s) => s.id === route.sheetId);
+        const owner = sheet
+          ? library.characters.find((c) => c.id === sheet.characterId)
+          : undefined;
+        return owner && sheet
+          ? [
+              { label: 'Characters', path: 'characters' },
+              { label: owner.name, path: characterRoute(owner.id) },
+              { label: sheet.name },
+            ]
+          : [{ label: 'Sheets', path: 'sheets' }, { label: sheet?.name ?? 'Sheet' }];
+      }
+      default:
+        return [];
+    }
+  })();
 
   const rootRef = useRef<HTMLDivElement>(null);
   useBlockResize(rootRef);
@@ -218,6 +281,7 @@ export function App() {
         </nav>
 
         <main className="css-content">
+          {crumbs.length > 0 && <Breadcrumbs items={crumbs} onNavigate={navigateTo} />}
           <Stack gap="md">
             {anon && (
               <Alert color="info">

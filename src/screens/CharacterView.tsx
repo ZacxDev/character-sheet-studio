@@ -1,12 +1,12 @@
-// Character page: everything about one character in one place — their
-// details, and every sheet built from them, each with its own image
-// carousel. A sheet here can be re-run on ANY character: pick who in the
-// row's character select and hit Run, and the Builder opens seeded with
-// that sheet's stack + panels for the chosen character.
+// Character page: one character, their sheets, and quick ways to make more.
+// The header keeps just the identity (portrait + name) and the actions —
+// the descriptive details live in a collapsed "View details" section. Each
+// sheet is a card: click it to open the sheet; "Re-run sheet" reopens the
+// Builder seeded with that sheet's stack + panels for THIS character.
 
 import { useState } from 'react';
 
-import { Button, Card, Group, Select, Stack } from '@civitai/blocks-react/ui';
+import { Button, Card, Group, Stack } from '@civitai/blocks-react/ui';
 
 import type { SheetJob } from '../sheet/types.js';
 import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
@@ -22,46 +22,36 @@ export interface CharacterViewProps {
   onRunSheet: (characterId: string, sheetId: string) => void;
 }
 
-function seedPolicyText(policy: string): string {
-  return policy === 'locked'
-    ? 'Locked seed — every panel reuses the same seed, so sheets reproduce consistently.'
-    : 'Varied seed — each panel rolls a fresh seed.';
-}
-
 function SheetRow({
   sheet,
-  characters,
-  defaultCharacterId,
+  characterId,
   onOpenSheet,
   onRunSheet,
 }: {
   sheet: SheetJob;
-  characters: { id: string; name: string }[];
-  defaultCharacterId: string;
+  characterId: string;
   onOpenSheet: (sheetId: string) => void;
   onRunSheet: (characterId: string, sheetId: string) => void;
 }) {
-  const [runFor, setRunFor] = useState(defaultCharacterId);
   const outputs = sheet.panels.flatMap((p) =>
     p.outputs[0] ? [{ url: p.outputs[0], label: p.label }] : [],
   );
   const doneCount = sheet.panels.filter((p) => p.outputs.length > 0).length;
 
   return (
-    <Card data-testid="char-view-sheet">
+    <Card
+      className="css-char-card"
+      data-testid="char-view-sheet"
+      onClick={() => onOpenSheet(sheet.id)}
+    >
       <Stack gap="sm">
-        <Group justify="space-between" align="center" wrap={false}>
-          <div style={{ minWidth: 0 }}>
-            <div className="css-char-name">{sheet.name}</div>
-            <div style={{ fontSize: 13, opacity: 0.7 }}>
-              {new Date(sheet.createdAt).toLocaleDateString()} · {doneCount}/
-              {sheet.panels.length} panels generated
-            </div>
+        <div style={{ minWidth: 0 }}>
+          <div className="css-char-name">{sheet.name}</div>
+          <div style={{ fontSize: 13, opacity: 0.7 }}>
+            {new Date(sheet.createdAt).toLocaleDateString()} · {doneCount}/
+            {sheet.panels.length} panels generated
           </div>
-          <Button size="sm" variant="light" onClick={() => onOpenSheet(sheet.id)}>
-            Open
-          </Button>
-        </Group>
+        </div>
 
         {outputs.length > 0 && (
           <div className="css-char-thumbs">
@@ -77,27 +67,17 @@ function SheetRow({
           </div>
         )}
 
-        <Group gap="sm" align="flex-end">
-          <div style={{ flex: 1, minWidth: 160 }}>
-            <Select
-              label="Run this sheet for"
-              value={runFor}
-              onChange={(v) => setRunFor(v)}
-              data-testid="char-view-run-for"
-            >
-              {characters.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </Select>
-          </div>
+        <Group justify="flex-end">
           <Button
             size="sm"
+            variant="light"
             data-testid="char-view-run"
-            onClick={() => onRunSheet(runFor, sheet.id)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRunSheet(characterId, sheet.id);
+            }}
           >
-            Run sheet
+            Re-run sheet
           </Button>
         </Group>
       </Stack>
@@ -114,6 +94,7 @@ export function CharacterView({
   onOpenSheet,
   onRunSheet,
 }: CharacterViewProps) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const character = library.characters.find((c) => c.id === characterId);
   const sheets = library.sheets
     .filter((s) => s.characterId === characterId)
@@ -142,18 +123,14 @@ export function CharacterView({
     );
   }
 
+  const hasDetails = Boolean(character.description) || character.traits.length > 0;
+
   return (
     <Stack gap="md">
-      <div>
-        <Button size="sm" variant="subtle" onClick={onBack}>
-          ← Characters
-        </Button>
-      </div>
-
       <Card>
         <Stack gap="sm">
           <Group justify="space-between" align="flex-start" wrap={false}>
-            <div style={{ display: 'flex', gap: 14, minWidth: 0 }}>
+            <div style={{ display: 'flex', gap: 14, minWidth: 0, alignItems: 'center' }}>
               {character.referenceImage && (
                 <img
                   src={character.referenceImage.url}
@@ -163,39 +140,44 @@ export function CharacterView({
                   style={{ borderRadius: 10, objectFit: 'cover', flexShrink: 0 }}
                 />
               )}
-              <div style={{ minWidth: 0 }}>
-                <h2 style={{ margin: 0, fontSize: 22 }}>{character.name}</h2>
-                {character.description && (
-                  <p style={{ margin: '4px 0 0', opacity: 0.8, overflowWrap: 'anywhere' }}>
-                    {character.description}
-                  </p>
-                )}
-              </div>
+              <h2 style={{ margin: 0, fontSize: 22 }}>{character.name}</h2>
             </div>
             <Button size="sm" variant="light" onClick={onEdit}>
               Edit
             </Button>
           </Group>
 
-          {character.traits.length > 0 && (
-            <p style={{ margin: 0, fontSize: 14 }}>
-              <strong>Traits:</strong> {character.traits.join(', ')}
-            </p>
-          )}
-          {character.triggerWords.length > 0 && (
-            <p style={{ margin: 0, fontSize: 14 }}>
-              <strong>Trigger words:</strong> {character.triggerWords.join(', ')}
-            </p>
-          )}
-          <p style={{ margin: 0, fontSize: 13, opacity: 0.75 }}>
-            {seedPolicyText(character.seedPolicy)}
-          </p>
-
-          <div>
+          <Group gap="sm" align="center">
             <Button data-testid="char-view-new-sheet" onClick={onNewSheet}>
               New sheet
             </Button>
-          </div>
+            {hasDetails && (
+              <Button
+                size="sm"
+                variant="subtle"
+                aria-expanded={detailsOpen}
+                data-testid="char-view-details-toggle"
+                onClick={() => setDetailsOpen((v) => !v)}
+              >
+                {detailsOpen ? 'Hide details' : 'View details'}
+              </Button>
+            )}
+          </Group>
+
+          {detailsOpen && hasDetails && (
+            <Stack gap="xs" data-testid="char-view-details">
+              {character.description && (
+                <p style={{ margin: 0, opacity: 0.85, overflowWrap: 'anywhere' }}>
+                  {character.description}
+                </p>
+              )}
+              {character.traits.length > 0 && (
+                <p style={{ margin: 0, fontSize: 14 }}>
+                  <strong>Traits:</strong> {character.traits.join(', ')}
+                </p>
+              )}
+            </Stack>
+          )}
         </Stack>
       </Card>
 
@@ -210,8 +192,7 @@ export function CharacterView({
           <SheetRow
             key={sheet.id}
             sheet={sheet}
-            characters={library.characters.map((c) => ({ id: c.id, name: c.name }))}
-            defaultCharacterId={character.id}
+            characterId={character.id}
             onOpenSheet={onOpenSheet}
             onRunSheet={onRunSheet}
           />

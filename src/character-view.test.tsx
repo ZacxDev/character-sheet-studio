@@ -135,12 +135,23 @@ describe('Character page', () => {
     expect(screen.queryByText('Complete')).not.toBeInTheDocument();
     expect(screen.getByText(/2\/2 panels generated/)).toBeInTheDocument();
 
+    // Details start collapsed; the seed-policy copy and trigger words are
+    // gone from this page entirely.
     const user = userEvent.setup();
+    expect(screen.queryByTestId('char-view-details')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Trigger words/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Locked seed/)).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('char-view-details-toggle'));
+    expect(screen.getByTestId('char-view-details')).toHaveTextContent(
+      'A cyberpunk street samurai',
+    );
+    expect(screen.queryByText(/Trigger words/)).not.toBeInTheDocument();
+
     await user.click(screen.getByTestId('char-view-new-sheet'));
     expect(onNewSheet).toHaveBeenCalledTimes(1);
   });
 
-  it('runs a sheet on any character picked in the row', async () => {
+  it('Re-run sheet targets the viewed character — no character picker', async () => {
     const onRunSheet = vi.fn();
     render(
       <CharacterView
@@ -154,10 +165,32 @@ describe('Character page', () => {
       />,
     );
 
+    expect(screen.queryByTestId('char-view-run-for')).not.toBeInTheDocument();
     const user = userEvent.setup();
-    await user.selectOptions(screen.getByTestId('char-view-run-for'), 'char-2');
     await user.click(screen.getByTestId('char-view-run'));
-    expect(onRunSheet).toHaveBeenCalledWith('char-2', 'sheet-1');
+    expect(onRunSheet).toHaveBeenCalledWith('char-1', 'sheet-1');
+  });
+
+  it('clicking a sheet card opens the sheet', async () => {
+    const onOpenSheet = vi.fn();
+    render(
+      <CharacterView
+        library={stubLibrary({ sheets: [kaidaSheet] })}
+        characterId="char-1"
+        onBack={() => {}}
+        onEdit={() => {}}
+        onNewSheet={() => {}}
+        onOpenSheet={onOpenSheet}
+        onRunSheet={() => {}}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('char-view-sheet'));
+    expect(onOpenSheet).toHaveBeenCalledWith('sheet-1');
+    // …and Re-run does not also trigger the card's open.
+    await user.click(screen.getByTestId('char-view-run'));
+    expect(onOpenSheet).toHaveBeenCalledTimes(1);
   });
 
   it('Builder seeded from a sheet adopts its stack and panel setup', async () => {
@@ -180,7 +213,10 @@ describe('Character page', () => {
 
     // One panel matched the default Front spec; the other returns as a
     // selected custom panel with its own label — 2 panels priced in total.
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('builder-step-tab-1'));
     expect(await screen.findByText('Hero front')).toBeInTheDocument();
+    await user.click(screen.getByTestId('builder-step-tab-2'));
     expect(
       await screen.findByRole('button', { name: /Price 2 panels/ }),
     ).toBeInTheDocument();

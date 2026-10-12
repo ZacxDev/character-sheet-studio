@@ -69,8 +69,9 @@ function stubLibrary(over: Partial<SheetLibrary> = {}): SheetLibrary {
 
 type Outbound = { type?: string; payload?: unknown };
 
-/** Unselect every default panel card, leaving none picked. */
+/** Go to the Panels step, then unselect every default panel card. */
 async function unselectAllPanels(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByTestId('builder-step-tab-1'));
   for (const card of screen.getAllByTestId('builder-panel-card')) {
     if (card.dataset.selected === 'true') await user.click(card);
   }
@@ -164,7 +165,8 @@ describe('Builder prompt enhancement', () => {
     // around it.
     await user.click(screen.getByTestId('builder-panel-add'));
     expect(await screen.findByTestId('builder-panel-custom')).toBeInTheDocument();
-    await user.click(screen.getByTestId('se-builder-price'));
+    await user.click(screen.getByTestId('builder-step-tab-2'));
+    await user.click(await screen.findByTestId('se-builder-price'));
     await user.click(await screen.findByRole('button', { name: /Generate 1 panel/ }));
     await waitFor(() => expect(onOpenSheet).toHaveBeenCalled(), { timeout: 15_000 });
     const genSubmit = outbound.find(

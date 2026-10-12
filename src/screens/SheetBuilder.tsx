@@ -107,6 +107,8 @@ type BuilderPhase =
   | 'confirm'
   | 'submitting';
 
+const BUILDER_STEPS = ['Character & stack', 'Panels', 'Review & price'] as const;
+
 interface PanelEstimate {
   cost?: number;
   errorTitle?: string;
@@ -240,6 +242,8 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
   const [submitProgress, setSubmitProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  // The form is a 3-step flow, not one long scrolling card.
+  const [step, setStep] = useState(0);
 
   // Inline stack creation (with preset starting points).
   const [stackCreateOpen, setStackCreateOpen] = useState(false);
@@ -1008,6 +1012,23 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
       {phase !== 'confirm' ? (
         <Card>
           <Stack gap="md">
+            <Group gap="xs" wrap>
+              {BUILDER_STEPS.map((label, i) => (
+                <Button
+                  key={label}
+                  size="sm"
+                  variant={i === step ? 'filled' : 'light'}
+                  disabled={busy}
+                  onClick={() => setStep(i)}
+                  data-testid={`builder-step-tab-${i}`}
+                >
+                  {i + 1}. {label}
+                </Button>
+              ))}
+            </Group>
+
+            {step === 0 && (
+              <>
             <div>
               <Select
                 label="Character"
@@ -1113,7 +1134,16 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
                 </div>
               )}
             </div>
+              </>
+            )}
 
+            {step === 2 && (
+              <>
+            <div style={{ fontSize: 14, opacity: 0.85 }}>
+              {character?.name} · {stack?.name} · {chosenSpecs.length} panel
+              {chosenSpecs.length === 1 ? '' : 's'}:{' '}
+              {chosenSpecs.map((s) => s.label).join(', ')}
+            </div>
             <div>
               <Button
                 size="sm"
@@ -1165,7 +1195,11 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
                 )}
               </Stack>
             )}
+              </>
+            )}
 
+            {step === 1 && (
+              <>
             {/* Panel picker: icon cards instead of a checkbox list. */}
             <div>
               <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>
@@ -1420,7 +1454,11 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
                 </Card>
               )}
             </div>
+              </>
+            )}
 
+            {step === 2 && (
+              <>
             {character?.referenceImage && (
               <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 14, cursor: 'pointer' }}>
                 <input
@@ -1466,6 +1504,36 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
                     ? 'Select a panel to price'
                     : `Price ${chosenSpecs.length} panel${chosenSpecs.length === 1 ? '' : 's'}`}
               </Button>
+            </Group>
+              </>
+            )}
+
+            <Group justify="space-between" align="center">
+              {step > 0 ? (
+                <Button
+                  variant="subtle"
+                  disabled={busy}
+                  onClick={() => setStep((s) => Math.max(0, s - 1))}
+                  data-testid="builder-step-back"
+                >
+                  Back
+                </Button>
+              ) : (
+                <span />
+              )}
+              {step < 2 && (
+                <Button
+                  disabled={
+                    busy ||
+                    (step === 0 && (!characterId || !stackId)) ||
+                    (step === 1 && chosenSpecs.length === 0)
+                  }
+                  onClick={() => setStep((s) => Math.min(2, s + 1))}
+                  data-testid="builder-step-next"
+                >
+                  Continue
+                </Button>
+              )}
             </Group>
           </Stack>
         </Card>

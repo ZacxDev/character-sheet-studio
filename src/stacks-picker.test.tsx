@@ -160,19 +160,29 @@ describe('Sheet Builder panel gate + guest pricing', () => {
       />,
     );
 
-    const priceBtn = await screen.findByTestId('se-builder-price');
+    // Panels live on step 2 of the flow; the Price CTA on step 3.
+    await screen.findByTestId('builder-stack-card');
+    await user.click(screen.getByTestId('builder-step-tab-1'));
+    await user.click(screen.getByTestId('builder-step-tab-2'));
+    let priceBtn = await screen.findByTestId('se-builder-price');
     expect(priceBtn).toHaveTextContent('Price 4 panels');
     expect(priceBtn).not.toBeDisabled();
 
     // Unselect every picked panel card.
+    await user.click(screen.getByTestId('builder-step-tab-1'));
     for (const card of screen.getAllByTestId('builder-panel-card')) {
       if (card.dataset.selected === 'true') await user.click(card);
     }
+    await user.click(screen.getByTestId('builder-step-tab-2'));
+    priceBtn = await screen.findByTestId('se-builder-price');
     await waitFor(() => expect(priceBtn).toHaveTextContent('Select a panel to price'));
     expect(priceBtn).toBeDisabled();
 
     // Picking one panel card back re-enables pricing for exactly that panel.
+    await user.click(screen.getByTestId('builder-step-tab-1'));
     await user.click(screen.getAllByTestId('builder-panel-card')[0]);
+    await user.click(screen.getByTestId('builder-step-tab-2'));
+    priceBtn = await screen.findByTestId('se-builder-price');
     await waitFor(() => expect(priceBtn).toHaveTextContent('Price 1 panel'));
     expect(priceBtn).not.toBeDisabled();
   });
@@ -206,7 +216,7 @@ describe('Sheet Builder panel gate + guest pricing', () => {
       />,
     );
 
-    await screen.findByTestId('se-builder-price');
+    await screen.findAllByTestId('builder-stack-card');
     const characterSelect = screen.getByLabelText('Character') as HTMLSelectElement;
     const cardFor = (id: string) =>
       screen
@@ -243,6 +253,8 @@ describe('Sheet Builder panel gate + guest pricing', () => {
 
     // The guest state lives on the button itself; clicking asks the host
     // for sign-in, never a pricing call and never a second banner.
+    await screen.findByTestId('builder-stack-card');
+    await user.click(screen.getByTestId('builder-step-tab-2'));
     const priceBtn = await screen.findByTestId('se-builder-price');
     expect(priceBtn).toHaveTextContent('Sign in to generate');
     await user.click(priceBtn);
@@ -501,8 +513,8 @@ describe('Character drill-in, sheet previews, generation skeleton', () => {
     // No status badge on the character page.
     expect(screen.queryByText('Complete')).not.toBeInTheDocument();
 
-    // Back returns to the cast list.
-    await user.click(screen.getByRole('button', { name: '← Characters' }));
+    // Back returns to the cast list (via the breadcrumb).
+    await user.click(screen.getByRole('link', { name: 'Characters' }));
     expect(await screen.findByTestId('char-card')).toBeInTheDocument();
   });
 
@@ -634,13 +646,11 @@ describe('Batch B/C leftovers', () => {
     expect(screen.queryByText('Partially done')).not.toBeInTheDocument();
     expect(screen.queryByText('Not started')).not.toBeInTheDocument();
 
-    // Open the paused sheet from the character page — the count in the
+    // Open the paused sheet by clicking its card — the count in the
     // header IS the status voice now (no duplicate header badge).
-    const openBtns = await screen.findAllByRole('button', { name: 'Open' });
-    const pausedRow = openBtns.find((b) =>
-      b.closest('[data-testid="char-view-sheet"]')?.textContent?.includes('Paused sheet'),
-    );
-    await user.click(pausedRow ?? openBtns[0]);
+    const sheetCards = await screen.findAllByTestId('char-view-sheet');
+    const pausedCard = sheetCards.find((c) => c.textContent?.includes('Paused sheet'));
+    await user.click(pausedCard ?? sheetCards[0]);
     expect(await screen.findByText(/1\/2 panels done/)).toBeInTheDocument();
     expect(screen.queryByText('Partially done')).not.toBeInTheDocument();
 
@@ -949,6 +959,7 @@ describe('UX audit fix batch (P0/P1)', () => {
     expect(screen.queryByTestId('builder-create-character')).not.toBeInTheDocument();
 
     rerender(<SheetBuilder library={stubLibrary()} {...props} />);
+    await user.click(await screen.findByTestId('builder-step-tab-2'));
     await user.click(await screen.findByTestId('se-builder-price'));
     // The select DISPLAYED Kaida while state was '' before the fix; pricing
     // now runs against the healed selection instead of dead-ending.
@@ -973,6 +984,7 @@ describe('UX audit fix batch (P0/P1)', () => {
       />,
     );
 
+    await user.click(await screen.findByTestId('builder-step-tab-2'));
     await user.click(await screen.findByTestId('se-builder-price'));
     // 4 default panels × 8 Buzz against a 0 balance: warned HERE, with the
     // top-up on the card — not discovered via four failed panels later.
@@ -1185,8 +1197,7 @@ describe('Builder card pickers + inline create (v0.1.20)', () => {
   it('custom panels: create counts toward pricing, remove takes it back out', async () => {
     const user = userEvent.setup();
     renderBuilder();
-    const priceBtn = await screen.findByTestId('se-builder-price');
-    expect(priceBtn).toHaveTextContent('Price 4 panels');
+    await user.click(await screen.findByTestId('builder-step-tab-1'));
 
     await user.click(screen.getByTestId('builder-panel-new'));
     await user.type(screen.getByTestId('builder-panel-label'), 'Sky whale ride');
@@ -1195,16 +1206,22 @@ describe('Builder card pickers + inline create (v0.1.20)', () => {
 
     const custom = await screen.findByTestId('builder-panel-custom');
     expect(custom).toHaveTextContent('Sky whale ride');
+
+    await user.click(screen.getByTestId('builder-step-tab-2'));
+    let priceBtn = await screen.findByTestId('se-builder-price');
     await waitFor(() => expect(priceBtn).toHaveTextContent('Price 5 panels'));
 
+    await user.click(screen.getByTestId('builder-step-tab-1'));
     await user.click(screen.getByTestId(`builder-panel-remove-${custom.dataset.panelId}`));
+    await user.click(screen.getByTestId('builder-step-tab-2'));
+    priceBtn = await screen.findByTestId('se-builder-price');
     await waitFor(() => expect(priceBtn).toHaveTextContent('Price 4 panels'));
   });
 
   it('the Enhance button exists only inside the custom-panel editor', async () => {
     const user = userEvent.setup();
     renderBuilder();
-    await screen.findByTestId('se-builder-price');
+    await user.click(await screen.findByTestId('builder-step-tab-1'));
     expect(screen.queryByTestId('se-enhance')).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId('builder-panel-new'));

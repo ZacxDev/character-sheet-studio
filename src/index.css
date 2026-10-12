@@ -250,6 +250,47 @@ button:focus-visible {
   box-shadow: 0 1px 3px rgba(3, 6, 16, 0.3);
 }
 
+/* Breadcrumb trail above sub-page content. */
+.css-crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+
+.css-crumb-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.css-crumb-sep {
+  opacity: 0.45;
+  margin: 0 4px;
+}
+
+.css-crumb {
+  color: var(--civitai-color-primary);
+  text-decoration: none;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.css-crumb:hover {
+  text-decoration: underline;
+}
+
+.css-crumb-current {
+  color: var(--civitai-color-text-dimmed);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 46vw;
+}
+
 /* The slide-out trigger bar exists only on narrow screens — on wide ones
    the nav is a permanent rail and this stays display:none. */
 .css-topbar {
@@ -259,7 +300,8 @@ button:focus-visible {
 @media (max-width: 720px) {
   .css-layout {
     flex-direction: column;
-    gap: 12px;
+    /* Zero gap: the trigger bar and the content form ONE combined card. */
+    gap: 0;
   }
   .css-topbar {
     display: flex;
@@ -270,7 +312,8 @@ button:focus-visible {
     padding: 8px 10px;
     background: var(--civitai-color-surface);
     border: 1px solid var(--civitai-color-border);
-    border-radius: 12px;
+    border-bottom: none;
+    border-radius: 14px 14px 0 0;
   }
   .css-topbar-title {
     font-size: 14px;
@@ -307,6 +350,9 @@ button:focus-visible {
     width: 100%;
     box-sizing: border-box;
     padding: 14px;
+    /* Bottom half of the combined card whose top is the trigger bar. */
+    border-top: none;
+    border-radius: 0 0 14px 14px;
   }
 }
 
