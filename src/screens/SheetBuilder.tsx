@@ -90,6 +90,8 @@ export interface SheetBuilderProps {
   preselectedCharacterId: string | null;
   /** Stack handed over by a return trip from the Stacks tab (create flow). */
   preselectedStackId?: string | null;
+  /** Sheet whose stack + panels seed this form ("run this sheet" from a character page). */
+  seedSheetId?: string | null;
   onOpenSheet: (sheetId: string) => void;
   /** Take the viewer to create a stack, preserving the character in progress. */
   onCreateStack: (characterId: string) => void;
@@ -202,7 +204,7 @@ export function PanelKindIcon({ kind }: { kind: PanelKind }) {
   }
 }
 
-export function SheetBuilder({ library, preselectedCharacterId, preselectedStackId, onOpenSheet, onCreateCharacter }: SheetBuilderProps) {
+export function SheetBuilder({ library, preselectedCharacterId, preselectedStackId, seedSheetId, onOpenSheet, onCreateCharacter }: SheetBuilderProps) {
   const { ready, viewer } = useBlockContext();
   const token = useBlockToken();
   const { balance } = useBuzzBalance();
@@ -329,6 +331,43 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
       setSpecSelected(allSpecs.map((s) => library.settings.defaultPanels.includes(s.kind)));
     }
   }, [library.ready, library.settings, allSpecs]);
+
+  // "Run this sheet" seeding (declared AFTER the settings sync so it wins in
+  // the same commit): adopt the source sheet's stack and panel setup. A
+  // panel that still matches a default spec (same kind + wording) re-selects
+  // that spec; anything else comes back as a custom panel with its own label,
+  // wording, and enhancement, so re-running reproduces the original setup.
+  const seedAppliedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!seedSheetId || !library.ready || seedAppliedRef.current === seedSheetId) return;
+    const sheet = library.sheets.find((s) => s.id === seedSheetId);
+    if (!sheet) return;
+    seedAppliedRef.current = seedSheetId;
+    if (library.stacks.some((s) => s.id === sheet.stackId)) setStackId(sheet.stackId);
+    const used = new Set<number>();
+    const selected = allSpecs.map(() => false);
+    const customs: CustomPanelDraft[] = [];
+    for (const p of sheet.panels) {
+      const idx = allSpecs.findIndex(
+        (sp, i) => !used.has(i) && sp.kind === p.kind && sp.promptModifier === p.promptModifier,
+      );
+      if (idx >= 0) {
+        used.add(idx);
+        selected[idx] = true;
+      } else {
+        customs.push({
+          id: newPanelId(),
+          kind: p.kind,
+          label: p.label,
+          promptModifier: p.promptModifier,
+          selected: true,
+          ...(p.enhancedPrompt ? { enhancedPrompt: p.enhancedPrompt } : {}),
+        });
+      }
+    }
+    setSpecSelected(selected);
+    setCustomPanels(customs);
+  }, [seedSheetId, library.ready, library.sheets, library.stacks, allSpecs]);
 
   /** Everything that would generate: picked defaults + picked custom panels. */
   const chosenSpecs: ChosenSpec[] = useMemo(() => {

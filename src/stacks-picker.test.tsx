@@ -460,7 +460,7 @@ describe('Character drill-in, sheet previews, generation skeleton', () => {
     updatedAt: '2026-10-01T22:00:00.000Z',
   };
 
-  it('character card click lands on the filtered list with a preview thumbnail', async () => {
+  it('character card click lands on the character page with its sheets', async () => {
     const seed = {
       'v1:char:char-1': {
         id: 'char-1',
@@ -486,21 +486,24 @@ describe('Character drill-in, sheet previews, generation skeleton', () => {
       'src',
       'https://example.com/front.png',
     );
-    // …and clicking the card (no more Sheets button) lands on the list.
+    // …the seed-policy icon button is gone from the card…
+    expect(within(card).queryByTestId('char-seed-info')).not.toBeInTheDocument();
+    // …and clicking the card lands on the character's own page: details,
+    // the New sheet action, and the sheet with its image carousel.
     await user.click(card);
 
-    // Filtered to Kaida, with the generated image as the card preview.
-    await screen.findByText(/Sheets for/);
-    expect(screen.getByText('Kaida')).toBeInTheDocument();
-    expect(await screen.findByTestId('sheet-card-thumb')).toHaveAttribute(
+    expect(await screen.findByTestId('char-view-new-sheet')).toBeInTheDocument();
+    expect(screen.getByText('Kaida sheet')).toBeInTheDocument();
+    expect(await screen.findByTestId('char-view-thumb')).toHaveAttribute(
       'src',
       'https://example.com/front.png',
     );
-    expect(screen.getByText('Kaida sheet')).toBeInTheDocument();
+    // No status badge on the character page.
+    expect(screen.queryByText('Complete')).not.toBeInTheDocument();
 
-    // Show all clears the drill-in.
-    await user.click(screen.getByRole('button', { name: 'Show all' }));
-    await waitFor(() => expect(screen.queryByText(/Sheets for/)).not.toBeInTheDocument());
+    // Back returns to the cast list.
+    await user.click(screen.getByRole('button', { name: '← Characters' }));
+    expect(await screen.findByTestId('char-card')).toBeInTheDocument();
   });
 
   it('a running panel shows the generation skeleton, not a blank box', async () => {
@@ -624,25 +627,30 @@ describe('Batch B/C leftovers', () => {
     const card = await screen.findByTestId('char-card');
     await user.click(card);
 
-    // Human labels, not raw statuses.
+    // The character page lists both sheets by name and panel counts — no
+    // status badges or labels here.
+    expect(await screen.findByText('Paused sheet')).toBeInTheDocument();
+    expect(screen.getByText('Draft sheet')).toBeInTheDocument();
+    expect(screen.queryByText('Partially done')).not.toBeInTheDocument();
+    expect(screen.queryByText('Not started')).not.toBeInTheDocument();
+
+    // Open the paused sheet from the character page — the count in the
+    // header IS the status voice now (no duplicate header badge).
+    const openBtns = await screen.findAllByRole('button', { name: 'Open' });
+    const pausedRow = openBtns.find((b) =>
+      b.closest('[data-testid="char-view-sheet"]')?.textContent?.includes('Paused sheet'),
+    );
+    await user.click(pausedRow ?? openBtns[0]);
+    expect(await screen.findByText(/1\/2 panels done/)).toBeInTheDocument();
+    expect(screen.queryByText('Partially done')).not.toBeInTheDocument();
+
+    // The Sheets tab still speaks in human labels on the full list, and
+    // clicking it while a sheet is open returns to that list.
+    await user.click(screen.getByRole('button', { name: 'Sheets' }));
     expect(await screen.findByText('Partially done')).toBeInTheDocument();
     expect(screen.getByText('Not started')).toBeInTheDocument();
     expect(screen.queryByText('paused')).not.toBeInTheDocument();
     expect(screen.queryByText('draft')).not.toBeInTheDocument();
-
-    // Open the paused sheet — the count in the header IS the status voice
-    // now (the duplicate header badge is gone).
-    const openBtns = await screen.findAllByRole('button', { name: 'Open' });
-    const pausedRow = openBtns.find((b) =>
-      b.closest('[data-civitai-ui="card"]')?.textContent?.includes('Paused sheet'),
-    );
-    await user.click(pausedRow ?? openBtns[0]);
-    await screen.findByText('Paused sheet');
-    expect(screen.getByText(/1\/2 panels done/)).toBeInTheDocument();
-    expect(screen.queryByText('Partially done')).not.toBeInTheDocument();
-
-    // Clicking the already-active Sheets tab returns to the list.
-    await user.click(screen.getByRole('button', { name: 'Sheets' }));
     expect((await screen.findAllByRole('button', { name: 'Open' })).length).toBe(2);
   });
 

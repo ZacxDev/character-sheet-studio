@@ -250,25 +250,58 @@ button:focus-visible {
   box-shadow: 0 1px 3px rgba(3, 6, 16, 0.3);
 }
 
+/* The slide-out trigger bar exists only on narrow screens — on wide ones
+   the nav is a permanent rail and this stays display:none. */
+.css-topbar {
+  display: none;
+}
+
 @media (max-width: 720px) {
   .css-layout {
     flex-direction: column;
     gap: 12px;
   }
-  .css-sidenav {
-    position: static;
+  .css-topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     width: 100%;
     box-sizing: border-box;
-    flex-direction: row;
-    align-items: center;
-    overflow-x: auto;
-    scrollbar-width: none;
+    padding: 8px 10px;
+    background: var(--civitai-color-surface);
+    border: 1px solid var(--civitai-color-border);
+    border-radius: 12px;
   }
-  .css-sidenav::-webkit-scrollbar {
-    display: none;
+  .css-topbar-title {
+    font-size: 14px;
+    font-weight: 700;
   }
-  .css-nav-spacer {
-    display: none;
+  /* Slide-out sidebar: off-canvas until opened, then it (and its backdrop)
+     float above the content. */
+  .css-sidenav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 248px;
+    height: 100dvh;
+    z-index: 70;
+    flex-direction: column;
+    align-items: stretch;
+    overflow-y: auto;
+    border-radius: 0 14px 14px 0;
+    transform: translateX(-110%);
+    transition: transform 200ms ease;
+  }
+  .css-sidenav[data-open='true'] {
+    transform: translateX(0);
+    box-shadow: 24px 0 60px -20px rgba(0, 0, 0, 0.7);
+  }
+  .css-nav-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 65;
+    background: rgba(2, 3, 8, 0.55);
   }
   .css-content {
     width: 100%;
@@ -405,15 +438,35 @@ button:focus-visible {
   align-items: start;
 }
 
-/* Character cards are click targets (open the character's sheets, or the
-   Builder when they have none) — signal it and lift on hover. */
+/* Character cards are click targets (open the character's page) — signal it
+   and lift on hover. Nothing may spill past the card edge: long names,
+   unbroken words, and the thumbnail carousel all clip or scroll INSIDE. */
 .css-char-card {
   cursor: pointer;
+  overflow: hidden;
   transition: box-shadow 120ms ease, transform 120ms ease;
 }
 
 .css-char-card:hover {
   box-shadow: 0 4px 14px rgba(3, 6, 16, 0.4);
+}
+
+.css-char-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.css-char-desc {
+  opacity: 0.75;
+  font-size: 13px;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 /* Generated-panel thumbnails: a fixed-size carousel strip. Every thumb is

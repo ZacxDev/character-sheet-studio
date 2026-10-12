@@ -21,6 +21,7 @@ export const ROUTE_CHANGED = 'ROUTE_CHANGED';
 
 export type AppRoute =
   | { name: 'characters' }
+  | { name: 'character'; characterId: string }
   | { name: 'character-create' }
   | { name: 'character-edit'; characterId: string }
   | { name: 'stacks' }
@@ -58,6 +59,7 @@ export function parseAppRoute(subPath: string): AppRoute {
     if (second === 'new' && third === undefined) return { name: 'character-create' };
     const characterId = idSegment(second);
     if (characterId && third === 'edit') return { name: 'character-edit', characterId };
+    if (characterId && third === undefined) return { name: 'character', characterId };
     return { name: 'characters' };
   }
 
@@ -93,6 +95,10 @@ export function parseAppRoute(subPath: string): AppRoute {
 
 export function characterCreateRoute(): string {
   return 'characters/new';
+}
+
+export function characterRoute(characterId: string): string {
+  return `characters/${encodeURIComponent(characterId)}`;
 }
 
 export function characterEditRoute(characterId: string): string {

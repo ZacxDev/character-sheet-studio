@@ -24,6 +24,7 @@ import {
 import { useSheetLibrary } from './sheet/useSheetLibrary.js';
 import { SHEET_STATUS_LABEL } from './sheet/types.js';
 import { Characters } from './screens/Characters.js';
+import { CharacterView } from './screens/CharacterView.js';
 import { Stacks } from './screens/Stacks.js';
 import { SheetBuilder } from './screens/SheetBuilder.js';
 import { SheetView } from './screens/SheetView.js';
@@ -31,6 +32,7 @@ import {
   builderRoute,
   characterCreateRoute,
   characterEditRoute,
+  characterRoute,
   parseAppRoute,
   sheetRoute,
   sheetsRoute,
@@ -56,6 +58,7 @@ const NAV_ITEMS: Array<{ section: NavSection; label: string; route: string }> = 
 function navSectionForRoute(route: AppRoute): NavSection {
   switch (route.name) {
     case 'characters':
+    case 'character':
     case 'character-create':
     case 'character-edit':
       return 'characters';
@@ -106,10 +109,34 @@ export function App() {
   const [returnToBuilder, setReturnToBuilder] = useState<'character' | 'stack' | null>(null);
   const [builderCharacterId, setBuilderCharacterId] = useState<string | undefined>(undefined);
   const [builderStackId, setBuilderStackId] = useState<string | undefined>(undefined);
+  // A sheet whose setup (stack + panels) seeds the Builder — "run this sheet
+  // on any character" from the character page.
+  const [builderSheetSeed, setBuilderSheetSeed] = useState<string | null>(null);
+  // Slide-out sidebar (narrow screens; the wide layout keeps a fixed rail).
+  const [navOpen, setNavOpen] = useState(false);
+
+  // Any navigation closes the drawer — arriving somewhere with the menu
+  // still covering the page is never the intent.
+  useEffect(() => {
+    setNavOpen(false);
+  }, [subPath]);
+
+  // The sheet seed is consumed by the Builder visit it was set for; leaving
+  // the Builder drops it so a later plain visit starts from the defaults.
+  useEffect(() => {
+    if (route.name !== 'builder') setBuilderSheetSeed(null);
+  }, [route.name]);
 
   const anon = ready && !viewer;
 
   const goToBuilder = (characterId?: string) => {
+    setBuilderSheetSeed(null);
+    setBuilderCharacterId(characterId);
+    navigateTo(builderRoute(characterId));
+  };
+
+  const runSheetOn = (characterId: string, sheetId: string) => {
+    setBuilderSheetSeed(sheetId);
     setBuilderCharacterId(characterId);
     navigateTo(builderRoute(characterId));
   };
@@ -139,7 +166,34 @@ export function App() {
   return (
     <div ref={rootRef} className="css-root css-shell" data-theme={theme}>
       <div className="css-layout">
-        <nav className="css-sidenav" aria-label="App sections">
+        <div className="css-topbar">
+          <button
+            type="button"
+            className="css-icon-btn"
+            style={{ width: 36, height: 36 }}
+            aria-label={navOpen ? 'Close menu' : 'Open menu'}
+            aria-expanded={navOpen}
+            data-testid="nav-toggle"
+            onClick={() => setNavOpen((v) => !v)}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <path d="M4 7h16M4 12h16M4 17h16" />
+            </svg>
+          </button>
+          <span className="css-topbar-title">
+            {NAV_ITEMS.find((i) => i.section === activeNav)?.label}
+          </span>
+        </div>
+
+        {navOpen && (
+          <div
+            className="css-nav-backdrop"
+            data-testid="nav-backdrop"
+            onClick={() => setNavOpen(false)}
+          />
+        )}
+
+        <nav className="css-sidenav" aria-label="App sections" data-open={navOpen}>
           {NAV_ITEMS.map((item) => (
             <button
               key={item.section}
@@ -147,7 +201,10 @@ export function App() {
               aria-current={activeNav === item.section ? 'page' : undefined}
               data-value={item.section}
               className="css-nav-item"
-              onClick={() => navigateTo(item.route)}
+              onClick={() => {
+                setNavOpen(false);
+                navigateTo(item.route);
+              }}
             >
               {item.label}
             </button>
@@ -177,6 +234,7 @@ export function App() {
                 library={library}
                 onBuildSheet={goToBuilder}
                 onViewSheets={viewSheetsFor}
+                onOpenCharacter={(id) => navigateTo(characterRoute(id))}
                 initialEditor={characterEditor}
                 onEditorOpened={(editor) =>
                   navigateTo(
@@ -198,6 +256,19 @@ export function App() {
                 onCreateCancelled={() => {
                   if (returnToBuilder === 'character') setReturnToBuilder(null);
                 }}
+              />
+            )}
+
+            {route.name === 'character' && (
+              <CharacterView
+                key={route.characterId}
+                library={library}
+                characterId={route.characterId}
+                onBack={() => navigateTo('characters')}
+                onEdit={() => navigateTo(characterEditRoute(route.characterId))}
+                onNewSheet={() => goToBuilder(route.characterId)}
+                onOpenSheet={openSheet}
+                onRunSheet={runSheetOn}
               />
             )}
 
@@ -237,6 +308,7 @@ export function App() {
                 library={library}
                 preselectedCharacterId={route.characterId ?? null}
                 preselectedStackId={builderStackId ?? null}
+                seedSheetId={builderSheetSeed}
                 onOpenSheet={openSheet}
                 onCreateStack={(characterId) => {
                   setReturnToBuilder('stack');

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   builderRoute,
   characterEditRoute,
+  characterRoute,
   normalizeRoutePath,
   parseAppRoute,
   sheetRoute,
@@ -20,6 +21,10 @@ describe('parseAppRoute', () => {
 
   it('maps create/edit pages and preserves their ids', () => {
     expect(parseAppRoute('characters/new')).toEqual({ name: 'character-create' });
+    expect(parseAppRoute('characters/char-1')).toEqual({
+      name: 'character',
+      characterId: 'char-1',
+    });
     expect(parseAppRoute('characters/char-1/edit')).toEqual({
       name: 'character-edit',
       characterId: 'char-1',
@@ -59,6 +64,10 @@ describe('parseAppRoute', () => {
 
 describe('route builders', () => {
   it('round-trip the ids used by detail pages', () => {
+    expect(parseAppRoute(characterRoute('char 1'))).toEqual({
+      name: 'character',
+      characterId: 'char 1',
+    });
     expect(parseAppRoute(characterEditRoute('char 1'))).toEqual({
       name: 'character-edit',
       characterId: 'char 1',

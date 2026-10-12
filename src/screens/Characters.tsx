@@ -36,6 +36,8 @@ export interface CharactersProps {
   onBuildSheet: (characterId: string) => void;
   /** Jump to the Sheets page filtered to this character's sheets. */
   onViewSheets: (characterId: string) => void;
+  /** Open the character's own page (details + their sheets). */
+  onOpenCharacter?: (characterId: string) => void;
   /** Editor selected by the current page route, when the shell is routing. */
   initialEditor?: EditorState;
   /** The viewer asked to open the create/edit page. */
@@ -125,34 +127,6 @@ function useOverlayClose(open: boolean, close: () => void) {
   return ref;
 }
 
-/** Seed policy as an icon badge; the explanation lives in a popover. */
-function SeedPolicyInfo({ policy }: { policy: SeedPolicy }) {
-  const [open, setOpen] = useState(false);
-  const ref = useOverlayClose(open, () => setOpen(false));
-  return (
-    <div className="css-overlay-wrap" ref={ref}>
-      <button
-        type="button"
-        className="css-icon-btn"
-        data-testid="char-seed-info"
-        aria-label={`Seed policy: ${seedPolicyLabel(policy)}`}
-        aria-expanded={open}
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
-      >
-        {policy === 'locked' ? <LockIcon /> : <ShuffleIcon />}
-      </button>
-      {open && (
-        <div className="css-popover" role="dialog" onClick={(e) => e.stopPropagation()}>
-          <strong>{seedPolicyLabel(policy)}.</strong> {SEED_POLICY_EXPLAINER[policy]}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /** The card's 3-dot menu: Edit / Delete live here, not as card buttons. */
 function CharacterMenu({
   name,
@@ -218,6 +192,7 @@ export function Characters({
   library,
   onBuildSheet,
   onViewSheets,
+  onOpenCharacter,
   initialEditor,
   onEditorOpened,
   onEditorClosed,
@@ -239,9 +214,8 @@ export function Characters({
       ? library.characters.find((c) => c.id === editor.id)
       : undefined;
 
-  // Sheet count per character drives where a card click lands: no sheets
-  // yet → the Builder with this character preselected; has sheets → the
-  // Sheets tab filtered to this character.
+  // Sheet count per character — shown on the card; every card click opens
+  // the character's own page regardless of count.
   const sheetsByCharacter = new Map<string, number>();
   for (const s of library.sheets) {
     sheetsByCharacter.set(s.characterId, (sheetsByCharacter.get(s.characterId) ?? 0) + 1);
@@ -349,17 +323,21 @@ export function Characters({
         {library.characters.map((c) => {
           const sheetCount = sheetsByCharacter.get(c.id) ?? 0;
           const thumbs = thumbsByCharacter.get(c.id) ?? [];
+          const openCharacter = () =>
+            onOpenCharacter
+              ? onOpenCharacter(c.id)
+              : sheetCount > 0
+                ? onViewSheets(c.id)
+                : onBuildSheet(c.id);
           return (
             <Card
               key={c.id}
               className="css-char-card"
               data-testid="char-card"
-              onClick={() =>
-                sheetCount > 0 ? onViewSheets(c.id) : onBuildSheet(c.id)
-              }
+              onClick={openCharacter}
             >
               <Group justify="space-between" align="flex-start" wrap={false}>
-                <div style={{ display: 'flex', gap: 12, minWidth: 0 }}>
+                <div style={{ display: 'flex', gap: 12, minWidth: 0, flex: 1 }}>
                   {c.referenceImage && (
                     <img
                       src={c.referenceImage.url}
@@ -370,32 +348,17 @@ export function Characters({
                     />
                   )}
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 600 }}>{c.name}</div>
+                    <div className="css-char-name">{c.name}</div>
                     {c.description && (
-                      <div
-                        style={{
-                          opacity: 0.75,
-                          fontSize: 13,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          display: '-webkit-box',
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: 'vertical',
-                        }}
-                      >
-                        {c.description}
-                      </div>
+                      <div className="css-char-desc">{c.description}</div>
                     )}
                   </div>
                 </div>
-                <Group gap="xs" wrap={false}>
-                  <SeedPolicyInfo policy={c.seedPolicy} />
-                  <CharacterMenu
-                    name={c.name}
-                    onEdit={() => openEditor({ mode: 'edit', id: c.id })}
-                    onDelete={() => askDelete(c.id)}
-                  />
-                </Group>
+                <CharacterMenu
+                  name={c.name}
+                  onEdit={() => openEditor({ mode: 'edit', id: c.id })}
+                  onDelete={() => askDelete(c.id)}
+                />
               </Group>
 
               {thumbs.length > 0 && (
@@ -410,6 +373,26 @@ export function Characters({
                   ))}
                 </div>
               )}
+
+              <Group justify="space-between" align="center" style={{ marginTop: 12 }}>
+                <span style={{ fontSize: 13, opacity: 0.75 }}>
+                  {sheetCount === 0
+                    ? 'No sheets yet'
+                    : `${sheetCount} sheet${sheetCount === 1 ? '' : 's'}`}
+                </span>
+                <Button
+                  size="sm"
+                  data-testid="char-generate"
+                  onClick={(e) => {
+                    // The card click would open the same page — stop the
+                    // bubble so the navigation fires exactly once.
+                    e.stopPropagation();
+                    openCharacter();
+                  }}
+                >
+                  Generate
+                </Button>
+              </Group>
 
               {confirmDeleteId === c.id && (
                 <div onClick={(e) => e.stopPropagation()}>
