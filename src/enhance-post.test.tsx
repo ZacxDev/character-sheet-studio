@@ -166,7 +166,7 @@ describe('Builder prompt enhancement', () => {
     await user.click(screen.getByTestId('builder-panel-add'));
     expect(await screen.findByTestId('builder-panel-custom')).toBeInTheDocument();
     await user.click(screen.getByTestId('builder-step-tab-2'));
-    await user.click(await screen.findByTestId('se-builder-price'));
+    // Review auto-prices on arrival — no Price click needed.
     await user.click(await screen.findByRole('button', { name: /Generate 1 panel/ }));
     await waitFor(() => expect(onOpenSheet).toHaveBeenCalled(), { timeout: 15_000 });
     const genSubmit = outbound.find(
@@ -371,60 +371,6 @@ describe('Sheet View post-to-profile', () => {
     expect(notice).toHaveTextContent('Post service unavailable');
   });
 
-  it('posts the whole sheet: every unposted done panel in one post', async () => {
-    const outbound: Outbound[] = [];
-    const saved: SheetJob[] = [];
-    uninstall = installMockMoneyHost({
-      onOutbound: (msg) => {
-        outbound.push(msg as Outbound);
-      },
-    });
-    const user = userEvent.setup();
-    render(
-      <SheetView
-        library={stubLibrary({
-          sheets: [doneSheet()],
-          saveSheet: async (s) => {
-            saved.push(s);
-            return null;
-          },
-        })}
-        sheetId="sheet-1"
-        onBack={() => {}}
-        onNewSheet={() => {}}
-        onRegenerateSheet={() => {}}
-      />,
-    );
-
-    await user.click(await screen.findByTestId('se-post-sheet'));
-    await waitFor(() =>
-      expect(outbound.some((m) => m.type === 'CREATE_POST_FROM_APP')).toBe(true),
-    );
-    const payload = JSON.stringify(
-      outbound.find((m) => m.type === 'CREATE_POST_FROM_APP')?.payload,
-    );
-    expect(payload).toContain('"workflowId":"wf-front"');
-    expect(payload).toContain('"workflowId":"wf-side"');
-
-    // Once everything is posted, the sheet-level button retires into a
-    // "Posted ✓ + View post" link — no dead control left behind (each
-    // panel carries its own View post link too).
-    const viewPostLinks = await screen.findAllByRole('link', { name: 'View post' });
-    expect(viewPostLinks.length).toBeGreaterThan(0);
-    expect(viewPostLinks[0]).toHaveAttribute(
-      'href',
-      'https://civitai.com/posts/4242',
-    );
-    expect(screen.queryByTestId('se-post-sheet')).not.toBeInTheDocument();
-    expect(
-      saved.some(
-        (s) =>
-          s.postUrl === 'https://civitai.com/posts/4242' &&
-          s.panels.every((p) => p.posted === true),
-      ),
-    ).toBe(true);
-  });
-
   it('consent refused: honest note, no post attempted', async () => {
     const outbound: Outbound[] = [];
     uninstall = installMockMoneyHost({
@@ -491,68 +437,6 @@ describe('Sheet View post-to-profile', () => {
   });
 });
 
-describe('Sheet View stack switcher', () => {
-  let uninstall: (() => void) | undefined;
-  afterEach(() => {
-    uninstall?.();
-    uninstall = undefined;
-  });
-
-  it('switching the stack re-points panel re-runs at the new stack', async () => {
-    const outbound: Outbound[] = [];
-    const saved: SheetJob[] = [];
-    uninstall = installMockMoneyHost({
-      onOutbound: (msg) => {
-        outbound.push(msg as Outbound);
-      },
-    });
-    const stackB: ModelStack = {
-      ...demoStack,
-      id: 'stack-2',
-      name: 'Pony Detail',
-      checkpoint: { modelId: 200, modelVersionId: 999001, baseModel: 'Pony', name: 'Pony' },
-    };
-    const user = userEvent.setup();
-    render(
-      <SheetView
-        library={stubLibrary({
-          stacks: [demoStack, stackB],
-          sheets: [doneSheet()],
-          saveSheet: async (s) => {
-            saved.push(s);
-            return null;
-          },
-        })}
-        sheetId="sheet-1"
-        onBack={() => {}}
-        onNewSheet={() => {}}
-        onRegenerateSheet={() => {}}
-      />,
-    );
-
-    const cards = await screen.findAllByTestId('se-stack-card');
-    const cardFor = (id: string) => cards.find((c) => c.dataset.stackId === id);
-    expect(cardFor('stack-1')?.dataset.selected).toBe('true');
-    // The current stack's card shows its first generated image.
-    expect(cardFor('stack-1')?.querySelector('img')?.getAttribute('src')).toBe(
-      'https://images.example/front.png',
-    );
-
-    await user.click(cardFor('stack-2') as HTMLElement);
-    expect(saved.some((s) => s.stackId === 'stack-2')).toBe(true);
-    expect(cardFor('stack-2')?.dataset.selected).toBe('true');
-
-    // A panel re-run now prices against stack B's checkpoint (999001),
-    // not the sheet's original stack (128078).
-    await user.click(screen.getAllByTestId('se-panel-more')[0]);
-    await user.click(screen.getByRole('button', { name: 'New variation' }));
-    await screen.findByTestId('se-panel-confirm-submit');
-    const estimate = outbound.find((m) => m.type === 'ESTIMATE_WORKFLOW');
-    expect(JSON.stringify(estimate?.payload)).toContain('999001');
-    expect(JSON.stringify(estimate?.payload)).not.toContain('128078');
-  });
-});
-
 describe('Sheet View header actions', () => {
   let uninstall: (() => void) | undefined;
   afterEach(() => {
@@ -592,6 +476,10 @@ describe('Sheet View header actions', () => {
     // No standalone Delete button — it lives in the 3-dot menu, and picking
     // it surfaces a confirm row instead of deleting outright.
     expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+    // The results view carries no stack selector and no sheet-level post
+    // button (per-panel Post remains).
+    expect(screen.queryByTestId('se-stack-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('se-post-sheet')).not.toBeInTheDocument();
     await user.click(screen.getByTestId('se-sheet-menu'));
     await user.click(screen.getByTestId('se-sheet-delete'));
     expect(deleted).toEqual([]);

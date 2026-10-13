@@ -147,7 +147,7 @@ describe('Sheet Builder panel gate + guest pricing', () => {
     uninstall = undefined;
   });
 
-  it('zero panels: CTA relabels + disables; checking a panel re-enables it', async () => {
+  it('review auto-prices on arrival; zero panels keeps the disabled Price CTA', async () => {
     uninstall = installMockMoneyHost({});
     const user = userEvent.setup();
     render(
@@ -160,31 +160,33 @@ describe('Sheet Builder panel gate + guest pricing', () => {
       />,
     );
 
-    // Panels live on step 2 of the flow; the Price CTA on step 3.
+    // Landing on Review with the default 4 panels prices itself — the
+    // confirm card appears without anyone touching a Price button.
     await screen.findByTestId('builder-stack-card');
-    await user.click(screen.getByTestId('builder-step-tab-1'));
     await user.click(screen.getByTestId('builder-step-tab-2'));
-    let priceBtn = await screen.findByTestId('se-builder-price');
-    expect(priceBtn).toHaveTextContent('Price 4 panels');
-    expect(priceBtn).not.toBeDisabled();
+    expect(
+      await screen.findByRole('button', { name: /Generate 4 panels · 32 Buzz/ }),
+    ).toBeInTheDocument();
 
-    // Unselect every picked panel card.
+    // Back out, unselect every panel: no auto-price fires, and the Price
+    // CTA shows the disabled select-a-panel state.
+    await user.click(screen.getByTestId('se-confirm-back'));
     await user.click(screen.getByTestId('builder-step-tab-1'));
     for (const card of screen.getAllByTestId('builder-panel-card')) {
       if (card.dataset.selected === 'true') await user.click(card);
     }
     await user.click(screen.getByTestId('builder-step-tab-2'));
-    priceBtn = await screen.findByTestId('se-builder-price');
+    const priceBtn = await screen.findByTestId('se-builder-price');
     await waitFor(() => expect(priceBtn).toHaveTextContent('Select a panel to price'));
     expect(priceBtn).toBeDisabled();
 
-    // Picking one panel card back re-enables pricing for exactly that panel.
+    // Picking one panel back re-prices automatically for exactly that panel.
     await user.click(screen.getByTestId('builder-step-tab-1'));
     await user.click(screen.getAllByTestId('builder-panel-card')[0]);
     await user.click(screen.getByTestId('builder-step-tab-2'));
-    priceBtn = await screen.findByTestId('se-builder-price');
-    await waitFor(() => expect(priceBtn).toHaveTextContent('Price 1 panel'));
-    expect(priceBtn).not.toBeDisabled();
+    expect(
+      await screen.findByRole('button', { name: /Generate 1 panel/ }),
+    ).toBeInTheDocument();
   });
 
   it('Builder stack choice is independent of the character (no default-stack link)', async () => {
@@ -979,9 +981,9 @@ describe('UX audit fix batch (P0/P1)', () => {
 
     rerender(<SheetBuilder library={stubLibrary()} {...props} />);
     await user.click(await screen.findByTestId('builder-step-tab-2'));
-    await user.click(await screen.findByTestId('se-builder-price'));
-    // The select DISPLAYED Kaida while state was '' before the fix; pricing
-    // now runs against the healed selection instead of dead-ending.
+    // Landing on Review auto-prices. The select DISPLAYED Kaida while state
+    // was '' before the fix; pricing now runs against the healed selection
+    // instead of dead-ending.
     await waitFor(() =>
       expect(outbound.some((m) => m.type === 'ESTIMATE_WORKFLOW')).toBe(true),
     );
@@ -1004,9 +1006,9 @@ describe('UX audit fix batch (P0/P1)', () => {
     );
 
     await user.click(await screen.findByTestId('builder-step-tab-2'));
-    await user.click(await screen.findByTestId('se-builder-price'));
-    // 4 default panels × 8 Buzz against a 0 balance: warned HERE, with the
-    // top-up on the card — not discovered via four failed panels later.
+    // Auto-priced on arrival: 4 default panels × 8 Buzz against a 0 balance:
+    // warned HERE, with the top-up on the card — not discovered via four
+    // failed panels later.
     await screen.findByTestId('se-builder-insufficient');
     const generate = screen.getByRole('button', { name: /Generate 4 panels/ });
     expect(generate).toBeDisabled();
@@ -1288,6 +1290,9 @@ describe('Builder card pickers + inline create (v0.1.20)', () => {
   });
 
   it('custom panels: create counts toward pricing, remove takes it back out', async () => {
+    // Installed so the auto-price on Review can complete its consent +
+    // estimate round-trips; uninstalled at the end of this test.
+    const uninstallHost = installMockMoneyHost({});
     const user = userEvent.setup();
     renderBuilder();
     await user.click(await screen.findByTestId('builder-step-tab-1'));
@@ -1300,15 +1305,21 @@ describe('Builder card pickers + inline create (v0.1.20)', () => {
     const custom = await screen.findByTestId('builder-panel-custom');
     expect(custom).toHaveTextContent('Sky whale ride');
 
+    // The custom panel counts: landing on Review auto-prices 5 panels.
     await user.click(screen.getByTestId('builder-step-tab-2'));
-    let priceBtn = await screen.findByTestId('se-builder-price');
-    await waitFor(() => expect(priceBtn).toHaveTextContent('Price 5 panels'));
+    expect(
+      await screen.findByRole('button', { name: /Generate 5 panels/ }),
+    ).toBeInTheDocument();
 
+    // Removing it takes it back out of the price on the next arrival.
+    await user.click(screen.getByTestId('se-confirm-back'));
     await user.click(screen.getByTestId('builder-step-tab-1'));
     await user.click(screen.getByTestId(`builder-panel-remove-${custom.dataset.panelId}`));
     await user.click(screen.getByTestId('builder-step-tab-2'));
-    priceBtn = await screen.findByTestId('se-builder-price');
-    await waitFor(() => expect(priceBtn).toHaveTextContent('Price 4 panels'));
+    expect(
+      await screen.findByRole('button', { name: /Generate 4 panels/ }),
+    ).toBeInTheDocument();
+    uninstallHost();
   });
 
   it('the Enhance button exists only inside the custom-panel editor', async () => {

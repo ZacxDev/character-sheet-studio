@@ -674,20 +674,42 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
     void runSubmitRef.current();
   }, [anon, granted, requestConsentFor, requestSignIn]);
 
-  // Re-run shortcut: a seeded builder opens on the Review step and pulls
-  // prices on view, so the whole flow collapses to the confirm card. Fires
-  // once per seed, and only once the seed has actually applied and every
-  // pricing input is in place. Guests keep the manual path (their Price
+  // Auto-price on view of the Review step: whenever the viewer lands on
+  // step 3 with a complete setup, prices pull themselves — for the normal
+  // flow AND for a seeded re-run (which opens directly on Review). The
+  // input signature guards re-fires: backing out of the confirm to tweak
+  // advanced settings re-prices only if something actually changed, and a
+  // failed estimate never loops. Guests keep the manual path (their Price
   // button is the sign-in ask).
-  const autoPricedRef = useRef<string | null>(null);
+  const lastAutoPriceRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!seedSheetId || autoPricedRef.current === seedSheetId) return;
-    if (seedAppliedRef.current !== seedSheetId) return;
     if (step !== 2 || phase !== 'idle' || anon) return;
     if (!characterId || !stackId || chosenSpecs.length === 0) return;
-    autoPricedRef.current = seedSheetId;
+    const signature = [
+      characterId,
+      stackId,
+      String(seed),
+      account,
+      useReference ? 'ref' : 'noref',
+      ...chosenSpecs.map(
+        (s) => `${s.kind}|${s.label}|${s.promptModifier}|${s.enhancedPrompt ?? ''}`,
+      ),
+    ].join('~');
+    if (lastAutoPriceRef.current === signature) return;
+    lastAutoPriceRef.current = signature;
     startPricing();
-  }, [seedSheetId, step, phase, anon, characterId, stackId, chosenSpecs.length, startPricing]);
+  }, [
+    step,
+    phase,
+    anon,
+    characterId,
+    stackId,
+    chosenSpecs,
+    seed,
+    account,
+    useReference,
+    startPricing,
+  ]);
 
   // Auto-resume the waiting intent after a consent grant.
   useEffect(() => {
