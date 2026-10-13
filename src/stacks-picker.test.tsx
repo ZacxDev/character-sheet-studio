@@ -318,6 +318,8 @@ describe('Sheet View top-up affordance', () => {
         library={stubLibrary({ sheets: [sheetWith('unaffordable')] })}
         sheetId="sheet-1"
         onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
       />,
     );
     expect(await screen.findByTestId('se-panel-top-up')).toHaveTextContent('Top up Buzz');
@@ -328,6 +330,8 @@ describe('Sheet View top-up affordance', () => {
         library={stubLibrary({ sheets: [sheetWith('generation-failed')] })}
         sheetId="sheet-1"
         onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
       />,
     );
     await screen.findByText(/Front view/);
@@ -386,6 +390,8 @@ describe('Sheet View priced submits + action feedback', () => {
         })}
         sheetId="sheet-1"
         onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
       />,
     );
 
@@ -428,6 +434,8 @@ describe('Sheet View priced submits + action feedback', () => {
         })}
         sheetId="sheet-1"
         onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
       />,
     );
 
@@ -548,6 +556,8 @@ describe('Character drill-in, sheet previews, generation skeleton', () => {
         })}
         sheetId="sheet-1"
         onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
       />,
     );
     const skeleton = await screen.findByTestId('se-panel-skeleton');
@@ -698,6 +708,8 @@ describe('Batch B/C leftovers', () => {
         library={stubLibrary({ sheets: [queuedSheet] })}
         sheetId="sheet-q"
         onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
       />,
     );
 
@@ -892,6 +904,8 @@ describe('UX audit fix batch (P0/P1)', () => {
         library={stubLibrary({ sheets: [sheetFixture([panelFixture()])] })}
         sheetId="sheet-fx"
         onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
       />,
     );
 
@@ -933,6 +947,8 @@ describe('UX audit fix batch (P0/P1)', () => {
         })}
         sheetId="sheet-fx"
         onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
       />,
     );
     // Never a running panel with no resolving action: it offers Submit.
@@ -1015,6 +1031,8 @@ describe('UX audit fix batch (P0/P1)', () => {
         })}
         sheetId="sheet-fx"
         onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
       />,
     );
 

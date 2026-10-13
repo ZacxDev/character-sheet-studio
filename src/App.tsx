@@ -402,6 +402,8 @@ export function App() {
                 library={library}
                 sheetId={route.sheetId}
                 onBack={() => navigateTo(sheetsRoute())}
+                onNewSheet={goToBuilder}
+                onRegenerateSheet={runSheetOn}
               />
             )}
           </Stack>

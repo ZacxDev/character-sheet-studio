@@ -278,6 +278,8 @@ describe('Sheet View post-to-profile', () => {
         })}
         sheetId="sheet-1"
         onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
       />,
     );
 
@@ -335,6 +337,8 @@ describe('Sheet View post-to-profile', () => {
         library={stubLibrary({ sheets: [doneSheet()] })}
         sheetId="sheet-1"
         onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
       />,
     );
 
@@ -357,6 +361,8 @@ describe('Sheet View post-to-profile', () => {
         library={stubLibrary({ sheets: [doneSheet()] })}
         sheetId="sheet-1"
         onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
       />,
     );
     const postButtons = await screen.findAllByTestId('se-panel-post');
@@ -385,6 +391,8 @@ describe('Sheet View post-to-profile', () => {
         })}
         sheetId="sheet-1"
         onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
       />,
     );
 
@@ -431,6 +439,8 @@ describe('Sheet View post-to-profile', () => {
         library={stubLibrary({ sheets: [doneSheet()] })}
         sheetId="sheet-1"
         onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
       />,
     );
 
@@ -459,6 +469,8 @@ describe('Sheet View post-to-profile', () => {
         library={stubLibrary({ sheets: [doneSheet()] })}
         sheetId="sheet-1"
         onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
       />,
     );
 
@@ -513,6 +525,8 @@ describe('Sheet View stack switcher', () => {
         })}
         sheetId="sheet-1"
         onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
       />,
     );
 
@@ -536,5 +550,53 @@ describe('Sheet View stack switcher', () => {
     const estimate = outbound.find((m) => m.type === 'ESTIMATE_WORKFLOW');
     expect(JSON.stringify(estimate?.payload)).toContain('999001');
     expect(JSON.stringify(estimate?.payload)).not.toContain('128078');
+  });
+});
+
+describe('Sheet View header actions', () => {
+  let uninstall: (() => void) | undefined;
+  afterEach(() => {
+    uninstall?.();
+    uninstall = undefined;
+  });
+
+  it('New sheet + Regenerate sheet CTAs, and Delete behind the 3-dot menu', async () => {
+    uninstall = installMockMoneyHost({});
+    const onNewSheet = vi.fn();
+    const onRegenerateSheet = vi.fn();
+    const onBack = vi.fn();
+    const deleted: string[] = [];
+    const user = userEvent.setup();
+    render(
+      <SheetView
+        library={stubLibrary({
+          sheets: [doneSheet()],
+          deleteSheet: async (id) => {
+            deleted.push(id);
+            return null;
+          },
+        })}
+        sheetId="sheet-1"
+        onBack={onBack}
+        onNewSheet={onNewSheet}
+        onRegenerateSheet={onRegenerateSheet}
+      />,
+    );
+
+    // Header CTAs target this sheet's character.
+    await user.click(await screen.findByTestId('se-new-sheet'));
+    expect(onNewSheet).toHaveBeenCalledWith('char-1');
+    await user.click(screen.getByTestId('se-regenerate-sheet'));
+    expect(onRegenerateSheet).toHaveBeenCalledWith('char-1', 'sheet-1');
+
+    // No standalone Delete button — it lives in the 3-dot menu, and picking
+    // it surfaces a confirm row instead of deleting outright.
+    expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('se-sheet-menu'));
+    await user.click(screen.getByTestId('se-sheet-delete'));
+    expect(deleted).toEqual([]);
+    await user.click(await screen.findByTestId('se-sheet-delete-confirm'));
+    expect(deleted).toEqual(['sheet-1']);
+    expect(onBack).toHaveBeenCalledTimes(1);
   });
 });

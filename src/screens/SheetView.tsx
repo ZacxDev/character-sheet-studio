@@ -70,6 +70,10 @@ interface SheetViewProps {
   library: SheetLibrary;
   sheetId: string;
   onBack: () => void;
+  /** Start a fresh sheet for this sheet's character. */
+  onNewSheet: (characterId: string) => void;
+  /** Re-run this sheet's setup for its character (seeded Builder). */
+  onRegenerateSheet: (characterId: string, sheetId: string) => void;
 }
 
 function randomSeed(): number {
@@ -107,7 +111,7 @@ function retryReusesKey(panel: SheetPanel): boolean {
   return panel.errorCode === 'submit-failed' || panel.errorCode === 'submit-interrupted';
 }
 
-export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
+export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSheet }: SheetViewProps) {
   const { ready, viewer } = useBlockContext();
   const token = useBlockToken();
   const { estimate, submit, poll, cancel } = useBuzzWorkflow();
@@ -130,6 +134,25 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
   const [renaming, setRenaming] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menuOpen]);
   const [consentWait, setConsentWait] = useState(false);
   const [exporting, setExporting] = useState<string | null>(null);
   const [exportFlash, setExportFlash] = useState<string | null>(null);
@@ -869,10 +892,6 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
   }, [nameDraft, updateSheet]);
 
   const deleteSheet = useCallback(async () => {
-    if (!confirmDelete) {
-      setConfirmDelete(true);
-      return;
-    }
     const err = await library.deleteSheet(sheetId);
     if (err) {
       setError(storeErrorMessage(err));
@@ -880,7 +899,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
       return;
     }
     onBack();
-  }, [confirmDelete, library, onBack, sheetId]);
+  }, [library, onBack, sheetId]);
 
   // --- render ----------------------------------------------------------------------
 
@@ -926,17 +945,6 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
 
   return (
     <Stack gap="md">
-      <Group justify="flex-end" align="center">
-        <Button
-          variant="subtle"
-          color="error"
-          onClick={() => void deleteSheet()}
-          onBlur={() => setConfirmDelete(false)}
-        >
-          {confirmDelete ? 'Confirm delete' : 'Delete'}
-        </Button>
-      </Group>
-
       <Card>
         <Stack gap="xs">
           {renaming ? (
@@ -955,23 +963,74 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
               </Button>
             </Group>
           ) : (
-            <Group gap="sm" align="center">
-              <h2 style={{ margin: 0, fontSize: 20 }}>{sheet.name}</h2>
-              <Button
-                size="sm"
-                variant="subtle"
-                onClick={() => {
-                  setNameDraft(sheet.name);
-                  setRenaming(true);
-                }}
-              >
-                Rename
-              </Button>
+            <Group gap="sm" align="center" justify="space-between" wrap={false}>
+              <Group gap="sm" align="center">
+                <h2 style={{ margin: 0, fontSize: 20 }}>{sheet.name}</h2>
+                <Button
+                  size="sm"
+                  variant="subtle"
+                  onClick={() => {
+                    setNameDraft(sheet.name);
+                    setRenaming(true);
+                  }}
+                >
+                  Rename
+                </Button>
+              </Group>
+              <div className="css-overlay-wrap" ref={menuRef}>
+                <button
+                  type="button"
+                  className="css-icon-btn"
+                  data-testid="se-sheet-menu"
+                  aria-label={`Actions for ${sheet.name}`}
+                  aria-haspopup="menu"
+                  aria-expanded={menuOpen}
+                  onClick={() => setMenuOpen((v) => !v)}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <circle cx="12" cy="5" r="1.8" />
+                    <circle cx="12" cy="12" r="1.8" />
+                    <circle cx="12" cy="19" r="1.8" />
+                  </svg>
+                </button>
+                {menuOpen && (
+                  <div className="css-menu" role="menu">
+                    <button
+                      type="button"
+                      className="css-menu-item"
+                      role="menuitem"
+                      style={{ color: 'var(--civitai-color-error, #f87171)' }}
+                      data-testid="se-sheet-delete"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setConfirmDelete(true);
+                      }}
+                    >
+                      Delete sheet
+                    </button>
+                  </div>
+                )}
+              </div>
             </Group>
           )}
           <div style={{ fontSize: 14, opacity: 0.8 }}>
             {character?.name ?? 'Unknown character'} · {doneCount}/{sheet.panels.length} panels done
           </div>
+          <Group gap="sm" align="center">
+            <Button
+              data-testid="se-new-sheet"
+              onClick={() => onNewSheet(sheet.characterId)}
+            >
+              New sheet
+            </Button>
+            <Button
+              variant="light"
+              data-testid="se-regenerate-sheet"
+              onClick={() => onRegenerateSheet(sheet.characterId, sheet.id)}
+            >
+              Regenerate sheet
+            </Button>
+          </Group>
           {/* Stack switcher: the sheet's stack, changeable — panel re-runs
               (retry / regenerate / run-all) resolve the stack live, so the
               pick takes effect on the next run. Locked while a run is in
@@ -1023,6 +1082,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
             <Group gap="sm" align="center">
               <Button
                 size="sm"
+                variant="light"
                 loading={posting === 'sheet'}
                 disabled={posting !== null}
                 onClick={() => void postSheet()}
@@ -1062,10 +1122,31 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
       </Card>
 
       {confirmDelete && (
-        <p style={{ margin: 0, fontSize: 13, opacity: 0.75 }}>
-          This deletes the sheet and its panel records — generated images stay
-          in your Civitai creations.
-        </p>
+        <Alert color="error" data-testid="se-delete-confirm">
+          <Group justify="space-between" align="center" wrap>
+            <span style={{ fontSize: 13 }}>
+              This deletes the sheet and its panel records — generated images
+              stay in your Civitai creations.
+            </span>
+            <Group gap="sm">
+              <Button
+                size="sm"
+                color="error"
+                data-testid="se-sheet-delete-confirm"
+                onClick={() => void deleteSheet()}
+              >
+                Confirm delete
+              </Button>
+              <Button
+                size="sm"
+                variant="subtle"
+                onClick={() => setConfirmDelete(false)}
+              >
+                Cancel
+              </Button>
+            </Group>
+          </Group>
+        </Alert>
       )}
 
       {error && <Alert color="error">{error}</Alert>}
@@ -1260,6 +1341,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
                     <>
                       <Button
                         size="sm"
+                        variant="light"
                         loading={posting === panel.id}
                         disabled={!panel.workflowId || panel.posted || posting !== null}
                         onClick={() => void postPanel(panel)}
