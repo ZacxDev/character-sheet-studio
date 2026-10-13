@@ -301,9 +301,8 @@ export function Characters({
 
   return (
     <Stack gap="md">
-      <Group justify="space-between" align="center">
-        <h2 style={{ margin: 0, fontSize: 20 }}>Characters</h2>
-        <Button size="sm" onClick={() => openEditor({ mode: 'create' })}>
+      <Group justify="flex-end" align="center">
+        <Button size="sm" variant="light" onClick={() => openEditor({ mode: 'create' })}>
           New character
         </Button>
       </Group>
@@ -374,12 +373,7 @@ export function Characters({
                 </div>
               )}
 
-              <Group justify="space-between" align="center" style={{ marginTop: 12 }}>
-                <span style={{ fontSize: 13, opacity: 0.75 }}>
-                  {sheetCount === 0
-                    ? 'No sheets yet'
-                    : `${sheetCount} sheet${sheetCount === 1 ? '' : 's'}`}
-                </span>
+              <Group justify="flex-end" align="center" style={{ marginTop: 12 }}>
                 <Button
                   size="sm"
                   data-testid="char-generate"

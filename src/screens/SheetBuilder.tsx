@@ -107,7 +107,7 @@ type BuilderPhase =
   | 'confirm'
   | 'submitting';
 
-const BUILDER_STEPS = ['Character & stack', 'Panels', 'Review & price'] as const;
+const BUILDER_STEPS = ['Character', 'Panels', 'Review'] as const;
 
 interface PanelEstimate {
   cost?: number;
@@ -371,6 +371,9 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
     }
     setSpecSelected(selected);
     setCustomPanels(customs);
+    // Re-run goes straight to Review — the setup is already decided by the
+    // source sheet; the auto-price effect below prices it on view.
+    setStep(2);
   }, [seedSheetId, library.ready, library.sheets, library.stacks, allSpecs]);
 
   /** Everything that would generate: picked defaults + picked custom panels. */
@@ -669,6 +672,21 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
     }
     void runSubmitRef.current();
   }, [anon, granted, requestConsentFor, requestSignIn]);
+
+  // Re-run shortcut: a seeded builder opens on the Review step and pulls
+  // prices on view, so the whole flow collapses to the confirm card. Fires
+  // once per seed, and only once the seed has actually applied and every
+  // pricing input is in place. Guests keep the manual path (their Price
+  // button is the sign-in ask).
+  const autoPricedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!seedSheetId || autoPricedRef.current === seedSheetId) return;
+    if (seedAppliedRef.current !== seedSheetId) return;
+    if (step !== 2 || phase !== 'idle' || anon) return;
+    if (!characterId || !stackId || chosenSpecs.length === 0) return;
+    autoPricedRef.current = seedSheetId;
+    startPricing();
+  }, [seedSheetId, step, phase, anon, characterId, stackId, chosenSpecs.length, startPricing]);
 
   // Auto-resume the waiting intent after a consent grant.
   useEffect(() => {
@@ -993,8 +1011,6 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
 
   return (
     <Stack gap="md">
-      <h2 style={{ margin: 0, fontSize: 20 }}>Sheet Builder</h2>
-
       {error && <Alert color="error">{error}</Alert>}
 
       {phase === 'needs-consent' && (
@@ -1012,19 +1028,37 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
       {phase !== 'confirm' ? (
         <Card>
           <Stack gap="md">
-            <Group gap="xs" wrap>
-              {BUILDER_STEPS.map((label, i) => (
-                <Button
-                  key={label}
-                  size="sm"
-                  variant={i === step ? 'filled' : 'light'}
+            <Group gap="sm" align="center" wrap={false}>
+              {step > 0 && (
+                <button
+                  type="button"
+                  className="css-icon-btn"
                   disabled={busy}
-                  onClick={() => setStep(i)}
-                  data-testid={`builder-step-tab-${i}`}
+                  onClick={() => setStep((s) => Math.max(0, s - 1))}
+                  data-testid="builder-step-back"
+                  aria-label="Back"
                 >
-                  {i + 1}. {label}
-                </Button>
-              ))}
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M15 18l-6-6 6-6" />
+                  </svg>
+                </button>
+              )}
+              <div className="css-builder-steps" role="tablist" aria-label="Sheet builder steps">
+                {BUILDER_STEPS.map((label, i) => (
+                  <button
+                    key={label}
+                    type="button"
+                    className="css-step-link"
+                    role="tab"
+                    aria-current={i === step ? 'step' : undefined}
+                    disabled={busy}
+                    onClick={() => setStep(i)}
+                    data-testid={`builder-step-tab-${i}`}
+                  >
+                    {i + 1}. {label}
+                  </button>
+                ))}
+              </div>
             </Group>
 
             {step === 0 && (
@@ -1508,20 +1542,8 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
               </>
             )}
 
-            <Group justify="space-between" align="center">
-              {step > 0 ? (
-                <Button
-                  variant="subtle"
-                  disabled={busy}
-                  onClick={() => setStep((s) => Math.max(0, s - 1))}
-                  data-testid="builder-step-back"
-                >
-                  Back
-                </Button>
-              ) : (
-                <span />
-              )}
-              {step < 2 && (
+            {step < 2 && (
+              <Group justify="flex-end" align="center">
                 <Button
                   disabled={
                     busy ||
@@ -1533,15 +1555,32 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
                 >
                   Continue
                 </Button>
-              )}
-            </Group>
+              </Group>
+            )}
           </Stack>
         </Card>
       ) : (
         draft && (
           <Card>
             <Stack gap="sm">
-              <h3 style={{ margin: 0 }}>Confirm sheet</h3>
+              <Group gap="sm" align="center">
+                <button
+                  type="button"
+                  className="css-icon-btn"
+                  data-testid="se-confirm-back"
+                  aria-label="Back"
+                  onClick={() => {
+                    setDraft(null);
+                    setEstimates({});
+                    setPhase('idle');
+                  }}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M15 18l-6-6 6-6" />
+                  </svg>
+                </button>
+                <h3 style={{ margin: 0 }}>Confirm sheet</h3>
+              </Group>
               <div style={{ fontSize: 14, opacity: 0.8 }}>
                 {character?.name} · {stack?.name} · {draft.panels.length} panels
                 {useReference && character?.referenceImage ? ' · img2img from portrait' : ''}
@@ -1586,24 +1625,13 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
                   </Group>
                 </Alert>
               )}
-              <Group justify="flex-end">
-                <Button
-                  variant="subtle"
-                  onClick={() => {
-                    setDraft(null);
-                    setEstimates({});
-                    setPhase('idle');
-                  }}
-                >
-                  Back
-                </Button>
-                <Button
-                  onClick={startConfirmedSubmit}
-                  disabled={totalEstimate == null || shortBy != null}
-                >
-                  Generate {draft.panels.length} panels · {totalEstimate != null ? `${formatCost(totalEstimate)} Buzz` : ''}
-                </Button>
-              </Group>
+              <Button
+                style={{ width: '100%' }}
+                onClick={startConfirmedSubmit}
+                disabled={totalEstimate == null || shortBy != null}
+              >
+                Generate {draft.panels.length} panels · {totalEstimate != null ? `${formatCost(totalEstimate)} Buzz` : ''}
+              </Button>
             </Stack>
           </Card>
         )

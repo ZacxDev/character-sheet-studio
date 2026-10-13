@@ -250,6 +250,48 @@ button:focus-visible {
   box-shadow: 0 1px 3px rgba(3, 6, 16, 0.3);
 }
 
+/* Sheet rows on the character page get a larger carousel than list cards. */
+.css-char-thumbs-lg img {
+  width: 176px;
+  height: 176px;
+}
+
+/* Builder step links: quiet text links, not buttons — compact enough to
+   stay on one line on a phone. */
+.css-builder-steps {
+  display: flex;
+  gap: 16px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.css-builder-steps::-webkit-scrollbar {
+  display: none;
+}
+
+.css-step-link {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--civitai-color-text-dimmed);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.css-step-link:hover {
+  color: var(--civitai-color-text);
+}
+
+.css-step-link[aria-current='step'] {
+  color: var(--civitai-color-primary);
+  box-shadow: inset 0 -2px 0 var(--civitai-color-primary);
+}
+
 /* Breadcrumb trail above sub-page content. */
 .css-crumbs {
   display: flex;

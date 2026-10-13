@@ -303,6 +303,10 @@ describe('Sheet View post-to-profile', () => {
 
     await screen.findByTestId('se-post-notice');
     expect(screen.getByTestId('se-post-notice')).toHaveTextContent(/Posted to your profile/);
+    // The success notice carries a link to the post, opening in a new tab.
+    const viewLink = screen.getByTestId('se-post-view-link');
+    expect(viewLink).toHaveAttribute('href', 'https://civitai.com/posts/4242');
+    expect(viewLink).toHaveAttribute('target', '_blank');
     expect(postButtons[0]).toHaveTextContent('Posted ✓');
     expect(postButtons[0]).toBeDisabled();
     // The other panel is untouched.

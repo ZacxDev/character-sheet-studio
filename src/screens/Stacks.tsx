@@ -190,8 +190,7 @@ export function Stacks({
 
   return (
     <Stack gap="md">
-      <Group justify="space-between" align="center">
-        <h2 style={{ margin: 0, fontSize: 20 }}>Stacks</h2>
+      <Group justify="flex-end" align="center">
         <Button size="sm" onClick={() => openEditor({ mode: 'create' })}>
           New stack
         </Button>

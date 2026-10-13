@@ -1,10 +1,11 @@
 // Character page: one character, their sheets, and quick ways to make more.
 // The header keeps just the identity (portrait + name) and the actions —
-// the descriptive details live in a collapsed "View details" section. Each
-// sheet is a card: click it to open the sheet; "Re-run sheet" reopens the
-// Builder seeded with that sheet's stack + panels for THIS character.
+// Edit and the descriptive details live behind a 3-dot menu (details in a
+// collapsed section). Each sheet is a card: click it to open the sheet;
+// "Re-run sheet" reopens the Builder seeded with that sheet's stack +
+// panels for THIS character.
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { Button, Card, Group, Stack } from '@civitai/blocks-react/ui';
 
@@ -37,6 +38,11 @@ function SheetRow({
     p.outputs[0] ? [{ url: p.outputs[0], label: p.label }] : [],
   );
   const doneCount = sheet.panels.filter((p) => p.outputs.length > 0).length;
+  const dateText = new Date(sheet.createdAt).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
 
   return (
     <Card
@@ -46,15 +52,16 @@ function SheetRow({
     >
       <Stack gap="sm">
         <div style={{ minWidth: 0 }}>
-          <div className="css-char-name">{sheet.name}</div>
-          <div style={{ fontSize: 13, opacity: 0.7 }}>
-            {new Date(sheet.createdAt).toLocaleDateString()} · {doneCount}/
-            {sheet.panels.length} panels generated
+          <div className="css-char-name" style={{ fontSize: 13 }}>
+            {sheet.name}
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>
+            {dateText} · {doneCount}/{sheet.panels.length} panels generated
           </div>
         </div>
 
         {outputs.length > 0 && (
-          <div className="css-char-thumbs">
+          <div className="css-char-thumbs css-char-thumbs-lg">
             {outputs.map((o, i) => (
               <img
                 key={`${o.url}-${i}`}
@@ -95,6 +102,25 @@ export function CharacterView({
   onRunSheet,
 }: CharacterViewProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menuOpen]);
   const character = library.characters.find((c) => c.id === characterId);
   const sheets = library.sheets
     .filter((s) => s.characterId === characterId)
@@ -142,27 +168,60 @@ export function CharacterView({
               )}
               <h2 style={{ margin: 0, fontSize: 22 }}>{character.name}</h2>
             </div>
-            <Button size="sm" variant="light" onClick={onEdit}>
-              Edit
-            </Button>
+            <div className="css-overlay-wrap" ref={menuRef}>
+              <button
+                type="button"
+                className="css-icon-btn"
+                data-testid="char-view-menu"
+                aria-label={`Actions for ${character.name}`}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                onClick={() => setMenuOpen((v) => !v)}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <circle cx="12" cy="5" r="1.8" />
+                  <circle cx="12" cy="12" r="1.8" />
+                  <circle cx="12" cy="19" r="1.8" />
+                </svg>
+              </button>
+              {menuOpen && (
+                <div className="css-menu" role="menu">
+                  {hasDetails && (
+                    <button
+                      type="button"
+                      className="css-menu-item"
+                      role="menuitem"
+                      data-testid="char-view-details-toggle"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setDetailsOpen((v) => !v);
+                      }}
+                    >
+                      {detailsOpen ? 'Hide details' : 'View details'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="css-menu-item"
+                    role="menuitem"
+                    data-testid="char-view-menu-edit"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onEdit();
+                    }}
+                  >
+                    Edit
+                  </button>
+                </div>
+              )}
+            </div>
           </Group>
 
-          <Group gap="sm" align="center">
+          <div>
             <Button data-testid="char-view-new-sheet" onClick={onNewSheet}>
               New sheet
             </Button>
-            {hasDetails && (
-              <Button
-                size="sm"
-                variant="subtle"
-                aria-expanded={detailsOpen}
-                data-testid="char-view-details-toggle"
-                onClick={() => setDetailsOpen((v) => !v)}
-              >
-                {detailsOpen ? 'Hide details' : 'View details'}
-              </Button>
-            )}
-          </Group>
+          </div>
 
           {detailsOpen && hasDetails && (
             <Stack gap="xs" data-testid="char-view-details">

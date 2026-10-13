@@ -135,12 +135,15 @@ describe('Character page', () => {
     expect(screen.queryByText('Complete')).not.toBeInTheDocument();
     expect(screen.getByText(/2\/2 panels generated/)).toBeInTheDocument();
 
-    // Details start collapsed; the seed-policy copy and trigger words are
-    // gone from this page entirely.
+    // Details start collapsed — behind the header's 3-dot menu; the
+    // seed-policy copy and trigger words are gone from this page entirely.
     const user = userEvent.setup();
     expect(screen.queryByTestId('char-view-details')).not.toBeInTheDocument();
     expect(screen.queryByText(/Trigger words/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Locked seed/)).not.toBeInTheDocument();
+    // Sheet dates read human: "Oct 2, 2026", not 10/2/2026.
+    expect(screen.getByText(/Oct 2, 2026/)).toBeInTheDocument();
+    await user.click(screen.getByTestId('char-view-menu'));
     await user.click(screen.getByTestId('char-view-details-toggle'));
     expect(screen.getByTestId('char-view-details')).toHaveTextContent(
       'A cyberpunk street samurai',
@@ -193,7 +196,7 @@ describe('Character page', () => {
     expect(onOpenSheet).toHaveBeenCalledTimes(1);
   });
 
-  it('Builder seeded from a sheet adopts its stack and panel setup', async () => {
+  it('Builder seeded from a sheet lands on the priced confirm — stack and panels adopted', async () => {
     uninstall = installMockMoneyHost({});
     render(
       <SheetBuilder
@@ -206,19 +209,24 @@ describe('Character page', () => {
       />,
     );
 
-    // The sheet's stack (B), not the first stack, is selected.
+    // The re-run shortcut: no step walking, no Price click — the builder
+    // opens on Review and auto-prices straight to the confirm card, which
+    // names the adopted stack (B) and both panels (mock: 8 Buzz each).
+    expect(
+      await screen.findByRole('button', { name: /Generate 2 panels · 16 Buzz/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Mira · Stack B · 2 panels/)).toBeInTheDocument();
+    expect(screen.getByText('Hero front')).toBeInTheDocument();
+
+    // Backing out to the form proves the adoption underneath: stack B is
+    // the selected card, and the unmatched panel returned as a custom one.
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('se-confirm-back'));
+    await user.click(screen.getByTestId('builder-step-tab-0'));
     const stackCards = await screen.findAllByTestId('builder-stack-card');
     const selected = stackCards.find((c) => c.dataset.selected === 'true');
     expect(selected?.textContent).toContain('Stack B');
-
-    // One panel matched the default Front spec; the other returns as a
-    // selected custom panel with its own label — 2 panels priced in total.
-    const user = userEvent.setup();
     await user.click(screen.getByTestId('builder-step-tab-1'));
     expect(await screen.findByText('Hero front')).toBeInTheDocument();
-    await user.click(screen.getByTestId('builder-step-tab-2'));
-    expect(
-      await screen.findByRole('button', { name: /Price 2 panels/ }),
-    ).toBeInTheDocument();
   });
 });

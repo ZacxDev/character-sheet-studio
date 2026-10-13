@@ -154,6 +154,9 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
   // last post outcome message (Posted ✓ / error copy from posting.ts).
   const [posting, setPosting] = useState<string | null>(null);
   const [postNotice, setPostNotice] = useState<string | null>(null);
+  // URL of the most recent successful post — the success notice carries a
+  // "View post" link (new tab) the moment a post lands.
+  const [lastPostUrl, setLastPostUrl] = useState<string | null>(null);
   // Which panel's "More" menu (Export / Publish / New variation) is open.
   const [menuPanelId, setMenuPanelId] = useState<string | null>(null);
   // 1s ticker that only runs while a panel is generating — drives the
@@ -775,6 +778,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
     async (panel: SheetPanel) => {
       if (!panel.workflowId || !sheet) return;
       setPostNotice(null);
+      setLastPostUrl(null);
       setPosting(panel.id);
       try {
         const result = await createPost({
@@ -791,6 +795,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
           postUrl: result.url,
         }));
         setPostNotice('Posted to your profile ✓');
+        setLastPostUrl(result.url);
       } catch (err) {
         handlePostError(err, () => void doPostPanel(panel));
       } finally {
@@ -818,6 +823,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
     );
     if (targets.length === 0) return;
     setPostNotice(null);
+    setLastPostUrl(null);
     setPosting('sheet');
     try {
       const result = await createPost({
@@ -839,6 +845,7 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
         ),
       }));
       setPostNotice('Posted to your profile ✓');
+      setLastPostUrl(result.url);
     } catch (err) {
       handlePostError(err, () => void doPostSheet());
     } finally {
@@ -980,6 +987,16 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
                 {unpostedDone.length} finished panel
                 {unpostedDone.length === 1 ? '' : 's'} ready
               </span>
+              {sheet.postUrl && (
+                <a
+                  href={sheet.postUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ fontSize: 13 }}
+                >
+                  View post
+                </a>
+              )}
             </Group>
           ) : sheet.postUrl ? (
             <Group gap="sm" align="center">
@@ -1008,6 +1025,19 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
       {postNotice && (
         <Alert color="info" data-testid="se-post-notice">
           {postNotice}
+          {lastPostUrl && (
+            <>
+              {' '}
+              <a
+                href={lastPostUrl}
+                target="_blank"
+                rel="noreferrer"
+                data-testid="se-post-view-link"
+              >
+                View post ↗
+              </a>
+            </>
+          )}
         </Alert>
       )}
       {consentWait && (
