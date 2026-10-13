@@ -11,6 +11,7 @@ import { Button, Card, Group, Stack } from '@civitai/blocks-react/ui';
 
 import type { SheetJob } from '../sheet/types.js';
 import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
+import { characterProfileUrl } from '../sheet/profile.js';
 
 export interface CharacterViewProps {
   library: SheetLibrary;
@@ -157,15 +158,27 @@ export function CharacterView({
         <Stack gap="sm">
           <Group justify="space-between" align="flex-start" wrap={false}>
             <div style={{ display: 'flex', gap: 14, minWidth: 0, alignItems: 'center' }}>
-              {character.referenceImage && (
-                <img
-                  src={character.referenceImage.url}
-                  alt=""
-                  width={72}
-                  height={72}
-                  style={{ borderRadius: 10, objectFit: 'cover', flexShrink: 0 }}
-                />
-              )}
+              {(() => {
+                const profileUrl = characterProfileUrl(character, library.sheets);
+                return profileUrl ? (
+                  <img
+                    src={profileUrl}
+                    alt=""
+                    width={72}
+                    height={72}
+                    style={{ borderRadius: 10, objectFit: 'cover', flexShrink: 0 }}
+                    data-testid="char-view-profile"
+                  />
+                ) : (
+                  <div
+                    className="css-avatar-initial"
+                    style={{ width: 72, height: 72, fontSize: 28, borderRadius: 10 }}
+                    aria-hidden="true"
+                  >
+                    {character.name.charAt(0).toUpperCase()}
+                  </div>
+                );
+              })()}
               <h2 style={{ margin: 0, fontSize: 22 }}>{character.name}</h2>
             </div>
             <div className="css-overlay-wrap" ref={menuRef}>

@@ -44,6 +44,8 @@ import {
 } from '../money/generation.js';
 import { startPollLoop } from '../money/pollLoop.js';
 import { buildSheetPanelBody } from '../sheet/body.js';
+import { stackImageUrl } from '../sheet/profile.js';
+import { checkpointDisplayLabel } from '../models.js';
 import {
   createPostErrorCopy,
   hasPostsScope,
@@ -907,7 +909,6 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
   }
 
   const character = library.characters.find((c) => c.id === sheet.characterId);
-  const stack = library.stacks.find((s) => s.id === sheet.stackId);
   const doneCount = sheet.panels.filter((p) => p.status === 'done').length;
   const queuedPanels = sheet.panels.filter((p) => p.status === 'queued' && !p.workflowId);
   // Done panels the sheet-level Post can still publish, and the batch-level
@@ -969,8 +970,54 @@ export function SheetView({ library, sheetId, onBack }: SheetViewProps) {
             </Group>
           )}
           <div style={{ fontSize: 14, opacity: 0.8 }}>
-            {character?.name ?? 'Unknown character'} · {stack?.name ?? 'Unknown stack'} ·{' '}
-            {doneCount}/{sheet.panels.length} panels done
+            {character?.name ?? 'Unknown character'} · {doneCount}/{sheet.panels.length} panels done
+          </div>
+          {/* Stack switcher: the sheet's stack, changeable — panel re-runs
+              (retry / regenerate / run-all) resolve the stack live, so the
+              pick takes effect on the next run. Locked while a run is in
+              flight or a price confirm is parked. */}
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6, opacity: 0.85 }}>
+              Stack — re-runs use the selected stack
+            </div>
+            {library.stacks.length === 0 ? (
+              <div style={{ fontSize: 13, opacity: 0.7 }}>
+                The stack this sheet used is no longer available.
+              </div>
+            ) : (
+              <div className="css-pick-strip">
+                {library.stacks.map((s) => {
+                  const imageUrl = stackImageUrl(library.sheets, s.id);
+                  const switchDisabled =
+                    busyPanel !== null ||
+                    panelConfirm !== null ||
+                    sheet.panels.some((p) => p.status === 'running');
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className="css-choice-card css-pick-stack"
+                      data-testid="se-stack-card"
+                      data-stack-id={s.id}
+                      data-selected={sheet.stackId === s.id}
+                      aria-pressed={sheet.stackId === s.id}
+                      disabled={switchDisabled}
+                      onClick={() =>
+                        void updateSheet((cur) => ({ ...cur, stackId: s.id }))
+                      }
+                    >
+                      {imageUrl && (
+                        <img className="css-pick-stack-img" src={imageUrl} alt="" />
+                      )}
+                      <div style={{ fontWeight: 600, fontSize: 15 }}>{s.name}</div>
+                      <div style={{ fontSize: 13, opacity: 0.8, marginTop: 2 }}>
+                        {checkpointDisplayLabel(s.checkpoint)}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
           {unpostedDone.length > 0 ? (
             <Group gap="sm" align="center">

@@ -217,7 +217,10 @@ describe('Sheet Builder panel gate + guest pricing', () => {
     );
 
     await screen.findAllByTestId('builder-stack-card');
-    const characterSelect = screen.getByLabelText('Character') as HTMLSelectElement;
+    const charCardFor = (id: string) =>
+      screen
+        .getAllByTestId('builder-char-card')
+        .find((c) => c.dataset.characterId === id) as HTMLElement;
     const cardFor = (id: string) =>
       screen
         .getAllByTestId('builder-stack-card')
@@ -225,12 +228,12 @@ describe('Sheet Builder panel gate + guest pricing', () => {
     expect(cardFor('stack-1').dataset.selected).toBe('true');
 
     // Switching to a character with a legacy default does not move the stack.
-    await user.selectOptions(characterSelect, 'char-2');
+    await user.click(charCardFor('char-2'));
     expect(cardFor('stack-1').dataset.selected).toBe('true');
 
     // And a stack picked for this run survives later character switches.
     await user.click(cardFor('stack-2'));
-    await user.selectOptions(characterSelect, 'char-1');
+    await user.click(charCardFor('char-1'));
     expect(cardFor('stack-2').dataset.selected).toBe('true');
   });
 
@@ -1151,6 +1154,78 @@ describe('Character form randomizer + seed toggle', () => {
     expect(screen.getByTestId('char-step-indicator')).toHaveTextContent(
       'Step 6 of 6 · Seed policy',
     );
+  });
+
+  it('profile step picks from generated images; the pick sticks on save', async () => {
+    const user = userEvent.setup();
+    const saved: Character[] = [];
+    const sheet: SheetJob = {
+      id: 'sheet-1',
+      name: 'Kaida sheet',
+      characterId: 'char-1',
+      stackId: 'stack-1',
+      seed: 42,
+      account: 'auto',
+      useReference: false,
+      status: 'complete',
+      panels: [
+        {
+          id: 'p1', kind: 'front', label: 'Front view', promptModifier: 'front view',
+          seed: 42, status: 'done', outputs: ['https://images.example/front.png'], submitNonce: 1,
+        },
+        {
+          id: 'p2', kind: 'side', label: 'Side view', promptModifier: 'side view',
+          seed: 43, status: 'done', outputs: ['https://images.example/side.png'], submitNonce: 1,
+        },
+      ],
+      createdAt: '2026-10-02T00:00:00.000Z',
+      updatedAt: '2026-10-02T00:00:00.000Z',
+    };
+    render(
+      <Characters
+        library={stubLibrary({
+          characters: [demoChar],
+          sheets: [sheet],
+          saveCharacter: async (c) => {
+            saved.push(c);
+            return null;
+          },
+        })}
+        onBuildSheet={() => {}}
+        onViewSheets={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByTestId('char-menu'));
+    await user.click(screen.getByTestId('char-menu-edit'));
+    // With generated images the form gains a step: Profile sits between
+    // Reference portrait and Seed policy (6 of 7).
+    await nextStep(user, 5);
+    expect(screen.getByTestId('char-step-indicator')).toHaveTextContent(
+      'Step 6 of 7 · Profile image',
+    );
+    const options = screen.getAllByTestId('char-profile-option');
+    expect(options.map((o) => o.dataset.url)).toEqual([
+      'https://images.example/front.png',
+      'https://images.example/side.png',
+    ]);
+    // No pick yet → the first generated image reads as the current profile.
+    expect(options[0].dataset.selected).toBe('true');
+
+    // Reset returns to the default; picking again sticks.
+    await user.click(options[1]);
+    expect(options[1].dataset.selected).toBe('true');
+    await user.click(screen.getByTestId('char-profile-reset'));
+    expect(options[0].dataset.selected).toBe('true');
+    await user.click(options[1]);
+
+    await nextStep(user);
+    expect(screen.getByTestId('char-step-indicator')).toHaveTextContent(
+      'Step 7 of 7 · Seed policy',
+    );
+    await user.click(screen.getByTestId('char-save'));
+    expect(saved).toHaveLength(1);
+    expect(saved[0].profileImageUrl).toBe('https://images.example/side.png');
   });
 });
 

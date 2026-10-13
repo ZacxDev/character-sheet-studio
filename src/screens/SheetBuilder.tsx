@@ -64,6 +64,7 @@ import {
   type AccountChoice,
 } from '../money/generation.js';
 import { buildSheetPanelBody } from '../sheet/body.js';
+import { characterProfileUrl, stackImageUrl } from '../sheet/profile.js';
 import {
   buildEnhanceBody,
   enhanceOutcomeFromSnapshot,
@@ -1063,19 +1064,42 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
 
             {step === 0 && (
               <>
+            {/* Character picker: profile-image cards in a carousel. */}
             <div>
-              <Select
-                label="Character"
-                value={characterId}
-                onChange={(v) => {
-                  setCharacterId(v);
-                  dropStaleEnhancements();
-                }}
-                options={library.characters.map((c) => ({ value: c.id, label: c.name }))}
-              />
+              <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>Character</div>
+              <div className="css-pick-strip">
+                {library.characters.map((c) => {
+                  const profileUrl = characterProfileUrl(c, library.sheets);
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className="css-choice-card css-pick-char"
+                      data-testid="builder-char-card"
+                      data-character-id={c.id}
+                      data-selected={characterId === c.id}
+                      aria-pressed={characterId === c.id}
+                      disabled={busy}
+                      onClick={() => {
+                        setCharacterId(c.id);
+                        dropStaleEnhancements();
+                      }}
+                    >
+                      {profileUrl ? (
+                        <img className="css-pick-img" src={profileUrl} alt="" />
+                      ) : (
+                        <div className="css-pick-initial" aria-hidden="true">
+                          {c.name.charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                      <div className="css-pick-name">{c.name}</div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
-            {/* Stack picker: full-detail cards, plus inline create. */}
+            {/* Stack picker: image carousel cards, plus inline create. */}
             <div>
               <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>Stack</div>
               {library.stacks.length === 0 && !stackCreateOpen && (
@@ -1083,12 +1107,14 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
                   No stacks yet — create the first one right here.
                 </p>
               )}
-              <div className="css-stack-picker">
-                {library.stacks.map((s) => (
+              <div className="css-pick-strip">
+                {library.stacks.map((s) => {
+                  const imageUrl = stackImageUrl(library.sheets, s.id);
+                  return (
                   <button
                     key={s.id}
                     type="button"
-                    className="css-choice-card"
+                    className="css-choice-card css-pick-stack"
                     data-testid="builder-stack-card"
                     data-stack-id={s.id}
                     data-selected={stackId === s.id}
@@ -1099,6 +1125,9 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
                       dropStaleEnhancements();
                     }}
                   >
+                    {imageUrl && (
+                      <img className="css-pick-stack-img" src={imageUrl} alt="" />
+                    )}
                     <div style={{ fontWeight: 600, fontSize: 15 }}>{s.name}</div>
                     <div style={{ fontSize: 13, opacity: 0.8, marginTop: 2 }}>
                       {checkpointDisplayLabel(s.checkpoint)}
@@ -1123,10 +1152,11 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
                       <div style={{ fontSize: 12, opacity: 0.6, marginTop: 8 }}>{s.notes}</div>
                     )}
                   </button>
-                ))}
+                  );
+                })}
                 <button
                   type="button"
-                  className="css-choice-card css-choice-add"
+                  className="css-choice-card css-choice-add css-pick-add"
                   data-testid="builder-stack-new"
                   disabled={busy}
                   onClick={() => setStackCreateOpen((v) => !v)}

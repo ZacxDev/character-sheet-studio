@@ -478,3 +478,63 @@ describe('Sheet View post-to-profile', () => {
     expect(postButtons[0]).toHaveTextContent('Post');
   });
 });
+
+describe('Sheet View stack switcher', () => {
+  let uninstall: (() => void) | undefined;
+  afterEach(() => {
+    uninstall?.();
+    uninstall = undefined;
+  });
+
+  it('switching the stack re-points panel re-runs at the new stack', async () => {
+    const outbound: Outbound[] = [];
+    const saved: SheetJob[] = [];
+    uninstall = installMockMoneyHost({
+      onOutbound: (msg) => {
+        outbound.push(msg as Outbound);
+      },
+    });
+    const stackB: ModelStack = {
+      ...demoStack,
+      id: 'stack-2',
+      name: 'Pony Detail',
+      checkpoint: { modelId: 200, modelVersionId: 999001, baseModel: 'Pony', name: 'Pony' },
+    };
+    const user = userEvent.setup();
+    render(
+      <SheetView
+        library={stubLibrary({
+          stacks: [demoStack, stackB],
+          sheets: [doneSheet()],
+          saveSheet: async (s) => {
+            saved.push(s);
+            return null;
+          },
+        })}
+        sheetId="sheet-1"
+        onBack={() => {}}
+      />,
+    );
+
+    const cards = await screen.findAllByTestId('se-stack-card');
+    const cardFor = (id: string) => cards.find((c) => c.dataset.stackId === id);
+    expect(cardFor('stack-1')?.dataset.selected).toBe('true');
+    // The current stack's card shows its first generated image.
+    expect(cardFor('stack-1')?.querySelector('img')?.getAttribute('src')).toBe(
+      'https://images.example/front.png',
+    );
+
+    await user.click(cardFor('stack-2') as HTMLElement);
+    expect(saved.some((s) => s.stackId === 'stack-2')).toBe(true);
+    expect(cardFor('stack-2')?.dataset.selected).toBe('true');
+
+    // A panel re-run now prices against stack B's checkpoint (999001),
+    // not the sheet's original stack (128078).
+    await user.click(screen.getAllByTestId('se-panel-more')[0]);
+    await user.click(screen.getByRole('button', { name: 'New variation' }));
+    await screen.findByTestId('se-panel-confirm-submit');
+    const estimate = outbound.find((m) => m.type === 'ESTIMATE_WORKFLOW');
+    expect(JSON.stringify(estimate?.payload)).toContain('999001');
+    expect(JSON.stringify(estimate?.payload)).not.toContain('128078');
+  });
+});

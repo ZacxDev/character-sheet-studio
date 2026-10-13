@@ -292,6 +292,114 @@ button:focus-visible {
   box-shadow: inset 0 -2px 0 var(--civitai-color-primary);
 }
 
+/* Horizontal pick strips: character + stack carousels in the Builder and
+   the stack switcher on the Sheet View. Cards are choice cards laid out as
+   a snap-scrolling row instead of a grid. */
+.css-pick-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding: 2px 2px 8px;
+  scrollbar-width: thin;
+}
+
+.css-pick-strip .css-choice-card {
+  width: auto;
+  scroll-snap-align: start;
+}
+
+.css-pick-char {
+  flex: 0 0 136px;
+}
+
+.css-pick-stack {
+  flex: 0 0 252px;
+}
+
+.css-pick-add {
+  flex: 0 0 180px;
+}
+
+.css-pick-img {
+  display: block;
+  width: 100%;
+  height: 104px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.css-pick-initial {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 104px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--civitai-color-primary) 16%, var(--civitai-color-surface-2));
+  color: var(--civitai-color-primary);
+  font-size: 40px;
+  font-weight: 700;
+}
+
+.css-pick-name {
+  margin-top: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Stack display image bleeding to the card's top edge. */
+.css-pick-stack-img {
+  display: block;
+  width: calc(100% + 24px);
+  height: 118px;
+  object-fit: cover;
+  margin: -12px -12px 10px;
+  border-radius: 11px 11px 0 0;
+}
+
+/* Initial-letter avatar tile (profile placeholder on cards/headers). */
+.css-avatar-initial {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--civitai-color-primary) 16%, var(--civitai-color-surface-2));
+  color: var(--civitai-color-primary);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* Profile picker grid in the character editor. */
+.css-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 8px;
+}
+
+.css-profile-option {
+  position: relative;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.css-profile-option img {
+  display: block;
+  width: 100%;
+  height: 84px;
+  object-fit: cover;
+}
+
+.css-profile-option[data-selected='true'] {
+  border-color: var(--civitai-color-primary);
+}
+
 /* Breadcrumb trail above sub-page content. */
 .css-crumbs {
   display: flex;

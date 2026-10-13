@@ -25,6 +25,7 @@ import type {
 } from '../sheet/types.js';
 import { newCharacter } from '../sheet/types.js';
 import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
+import { characterImageUrls, characterProfileUrl } from '../sheet/profile.js';
 import { parseListInput, storeErrorMessage } from './common.js';
 import { randomCharacter, randomName } from './random-character.js';
 
@@ -294,6 +295,9 @@ export function Characters({
             else onEdited?.();
           }}
           saveCharacter={library.saveCharacter}
+          profileChoices={
+            editing ? characterImageUrls(library.sheets, editing.id) : []
+          }
         />
       </Stack>
     );
@@ -337,15 +341,27 @@ export function Characters({
             >
               <Group justify="space-between" align="flex-start" wrap={false}>
                 <div style={{ display: 'flex', gap: 12, minWidth: 0, flex: 1 }}>
-                  {c.referenceImage && (
-                    <img
-                      src={c.referenceImage.url}
-                      alt=""
-                      width={56}
-                      height={56}
-                      style={{ borderRadius: 8, objectFit: 'cover', flexShrink: 0 }}
-                    />
-                  )}
+                  {(() => {
+                    const profileUrl = characterProfileUrl(c, library.sheets);
+                    return profileUrl ? (
+                      <img
+                        src={profileUrl}
+                        alt=""
+                        width={56}
+                        height={56}
+                        style={{ borderRadius: 8, objectFit: 'cover', flexShrink: 0 }}
+                        data-testid="char-card-profile"
+                      />
+                    ) : (
+                      <div
+                        className="css-avatar-initial"
+                        style={{ width: 56, height: 56, fontSize: 22 }}
+                        aria-hidden="true"
+                      >
+                        {c.name.charAt(0).toUpperCase()}
+                      </div>
+                    );
+                  })()}
                   <div style={{ minWidth: 0 }}>
                     <div className="css-char-name">{c.name}</div>
                     {c.description && (
@@ -429,16 +445,28 @@ interface EditorProps {
   onClose: () => void;
   onSaved: (saved: Character) => void;
   saveCharacter: SheetLibrary['saveCharacter'];
+  /** The character's generated images — the profile picker's choices. */
+  profileChoices: string[];
 }
 
-const CHARACTER_STEPS = [
-  'Name',
-  'Prompts',
-  'Traits',
-  'Trigger words',
-  'Reference portrait',
-  'Seed policy',
-] as const;
+type EditorStepKey =
+  | 'name'
+  | 'prompts'
+  | 'traits'
+  | 'triggers'
+  | 'portrait'
+  | 'profile'
+  | 'seed';
+
+const STEP_LABELS: Record<EditorStepKey, string> = {
+  name: 'Name',
+  prompts: 'Prompts',
+  traits: 'Traits',
+  triggers: 'Trigger words',
+  portrait: 'Reference portrait',
+  profile: 'Profile image',
+  seed: 'Seed policy',
+};
 
 function FieldHelp({ children }: { children: string }) {
   return (
@@ -446,7 +474,7 @@ function FieldHelp({ children }: { children: string }) {
   );
 }
 
-function CharacterEditor({ initial, onClose, onSaved, saveCharacter }: EditorProps) {
+function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoices }: EditorProps) {
   const [name, setName] = useState(initial?.name ?? '');
   const [description, setDescription] = useState(initial?.description ?? '');
   const [traits, setTraits] = useState((initial?.traits ?? []).join(', '));
@@ -454,6 +482,7 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter }: EditorPro
   const [negativePrompt, setNegativePrompt] = useState(initial?.negativePrompt ?? '');
   const [seedPolicy, setSeedPolicy] = useState<SeedPolicy>(initial?.seedPolicy ?? 'locked');
   const [refImage, setRefImage] = useState<CharacterRefImage | undefined>(initial?.referenceImage);
+  const [profileUrl, setProfileUrl] = useState<string | undefined>(initial?.profileImageUrl);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -543,6 +572,9 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter }: EditorPro
     // A removed portrait must not linger as an explicit `undefined` key.
     if (refImage) char.referenceImage = refImage;
     else delete char.referenceImage;
+    // Same for the profile pick: unset means "first generated image".
+    if (profileUrl) char.profileImageUrl = profileUrl;
+    else delete char.profileImageUrl;
     const err = await saveCharacter(char);
     setSaving(false);
     if (err) {
@@ -552,10 +584,23 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter }: EditorPro
     onSaved(char);
   };
 
-  const lastStep = CHARACTER_STEPS.length - 1;
+  // The Profile step only exists when the character has generated images
+  // to pick from — creating (or a character with no generations yet) keeps
+  // the original six steps.
+  const stepKeys: EditorStepKey[] = [
+    'name',
+    'prompts',
+    'traits',
+    'triggers',
+    'portrait',
+    ...(profileChoices.length > 0 ? (['profile'] as const) : []),
+    'seed',
+  ];
+  const stepKey = stepKeys[step] ?? 'name';
+  const lastStep = stepKeys.length - 1;
   const goBack = () => setStep((s) => Math.max(0, s - 1));
   const goNext = () => {
-    if (step === 0 && name.trim() === '') {
+    if (stepKey === 'name' && name.trim() === '') {
       setTouched(true);
       return;
     }
@@ -617,10 +662,10 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter }: EditorPro
           style={{ fontSize: 13, fontWeight: 600, opacity: 0.72 }}
           data-testid="char-step-indicator"
         >
-          Step {step + 1} of {CHARACTER_STEPS.length} · {CHARACTER_STEPS[step]}
+          Step {step + 1} of {stepKeys.length} · {STEP_LABELS[stepKey]}
         </div>
 
-        {step === 0 && (
+        {stepKey === 'name' && (
           <Stack gap="xs">
             <Group gap="xs" align="flex-end" wrap={false}>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -653,7 +698,7 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter }: EditorPro
           </Stack>
         )}
 
-        {step === 1 && (
+        {stepKey === 'prompts' && (
           <Stack gap="sm">
             <Stack gap="xs">
               <Textarea
@@ -686,7 +731,7 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter }: EditorPro
           </Stack>
         )}
 
-        {step === 2 && (
+        {stepKey === 'traits' && (
           <Stack gap="xs">
             <TextInput
               label="Traits (comma-separated)"
@@ -702,7 +747,7 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter }: EditorPro
           </Stack>
         )}
 
-        {step === 3 && (
+        {stepKey === 'triggers' && (
           <Stack gap="xs">
             <TextInput
               label="Trigger words (comma-separated)"
@@ -718,7 +763,7 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter }: EditorPro
           </Stack>
         )}
 
-        {step === 4 && (
+        {stepKey === 'portrait' && (
           <Stack gap="xs">
             <div>
               <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>
@@ -762,7 +807,56 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter }: EditorPro
           </Stack>
         )}
 
-        {step === 5 && (
+        {stepKey === 'profile' && (
+          <Stack gap="xs">
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>
+                Profile image
+              </div>
+              <div className="css-profile-grid">
+                {profileChoices.map((url) => {
+                  // The current profile: the explicit pick, or — with no
+                  // pick — the first generated image (the default).
+                  const current = profileUrl ?? profileChoices[0];
+                  return (
+                    <button
+                      key={url}
+                      type="button"
+                      className="css-profile-option"
+                      data-testid="char-profile-option"
+                      data-url={url}
+                      data-selected={current === url}
+                      aria-pressed={current === url}
+                      aria-label="Set as profile image"
+                      onClick={() => setProfileUrl(url)}
+                    >
+                      <img src={url} alt="" />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            {profileUrl && (
+              <div>
+                <Button
+                  size="sm"
+                  variant="subtle"
+                  data-testid="char-profile-reset"
+                  onClick={() => setProfileUrl(undefined)}
+                >
+                  Reset to first generated image
+                </Button>
+              </div>
+            )}
+            <FieldHelp>
+              Shown wherever this character appears. Display only — it never
+              feeds generation. With no pick, the first generated image is
+              used.
+            </FieldHelp>
+          </Stack>
+        )}
+
+        {stepKey === 'seed' && (
           <Stack gap="xs">
             <div>
               <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>

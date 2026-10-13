@@ -99,6 +99,13 @@ export interface Character {
   negativePrompt: string;
   referenceImage?: CharacterRefImage;
   /**
+   * Explicitly chosen profile image (display-only; picked from the
+   * character's generated images in the edit form). When unset, the profile
+   * resolves to the first generated image — see sheet/profile.ts. Never
+   * feeds generation; the img2img source is `referenceImage`.
+   */
+  profileImageUrl?: string;
+  /**
    * Legacy per-character stack link from older saves. It is retained only so
    * those records normalize unchanged; the app no longer writes or reads it —
    * a stack is chosen in the Sheet Builder for each run.
@@ -126,6 +133,7 @@ export function normalizeCharacter(v: unknown): Character | null {
   if (id === null || name === null) return null;
   const seedPolicy = v.seedPolicy === 'varied' ? 'varied' : 'locked';
   const refImage = normalizeRefImage(v.referenceImage);
+  const profileImageUrl = asNonEmptyString(v.profileImageUrl) ?? undefined;
   const defaultStackId = asNonEmptyString(v.defaultStackId) ?? undefined;
   return {
     id,
@@ -135,6 +143,7 @@ export function normalizeCharacter(v: unknown): Character | null {
     triggerWords: asStringArray(v.triggerWords),
     negativePrompt: asString(v.negativePrompt) ?? '',
     ...(refImage ? { referenceImage: refImage } : {}),
+    ...(profileImageUrl ? { profileImageUrl } : {}),
     ...(defaultStackId ? { defaultStackId } : {}),
     seedPolicy,
     createdAt: asString(v.createdAt) ?? isoNow(),
@@ -149,6 +158,7 @@ export function newCharacter(init: {
   triggerWords?: string[];
   negativePrompt?: string;
   referenceImage?: CharacterRefImage;
+  profileImageUrl?: string;
   defaultStackId?: string;
   seedPolicy?: SeedPolicy;
 }): Character {
@@ -161,6 +171,7 @@ export function newCharacter(init: {
     triggerWords: init.triggerWords ?? [],
     negativePrompt: init.negativePrompt ?? '',
     ...(init.referenceImage ? { referenceImage: init.referenceImage } : {}),
+    ...(init.profileImageUrl ? { profileImageUrl: init.profileImageUrl } : {}),
     ...(init.defaultStackId ? { defaultStackId: init.defaultStackId } : {}),
     seedPolicy: init.seedPolicy ?? 'locked',
     createdAt: now,
