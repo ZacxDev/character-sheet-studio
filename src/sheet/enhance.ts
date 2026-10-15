@@ -57,6 +57,67 @@ export function buildEnhanceBody(composedPrompt: string, baseModel: string): Wor
   };
 }
 
+/**
+ * The workflow body that rewrites a character's POSITIVE prompt — the
+ * reusable identity fragment (`character.description`) that starts every
+ * panel prompt. Unlike the panel rewrite this must NOT bake in a pose,
+ * scene, or framing: panels supply those per image, so the output stays a
+ * fragment that composes. No base-model tuning either — a character is no
+ * longer tied to one stack, so the instruction stays model-neutral.
+ */
+export function buildCharacterPromptEnhanceBody(fragment: string): WorkflowBody {
+  return {
+    kind: 'step',
+    step: 'chat-completion',
+    params: {
+      model: ENHANCE_MODEL,
+      maxTokens: ENHANCE_MAX_TOKENS,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You rewrite character description fragments for image generation. ' +
+            'The input is a reusable character description that is combined with pose and scene prompts later. ' +
+            'Return ONLY the rewritten fragment — no preamble, no explanation, no quotation marks, no line breaks. ' +
+            'Preserve every trigger word, character name, and proper noun from the input verbatim. ' +
+            'Enrich identity and appearance with concrete visual detail (species and build, face, hair or fur, eyes, markings, signature clothing and materials, rendering style). ' +
+            'Do NOT add a pose, action, scene, background, camera framing, or shot lighting — those are chosen separately for each image. ' +
+            'Keep it under 100 words.',
+        },
+        { role: 'user', content: fragment },
+      ],
+    },
+  };
+}
+
+/**
+ * The workflow body that refines a character's NEGATIVE prompt — a
+ * comma-separated exclusion list, not prose. The rewrite keeps the list
+ * shape: every input term survives and closely related exclusions are
+ * added; sentences would corrupt the field's meaning at generation time.
+ */
+export function buildNegativePromptEnhanceBody(negativePrompt: string): WorkflowBody {
+  return {
+    kind: 'step',
+    step: 'chat-completion',
+    params: {
+      model: ENHANCE_MODEL,
+      maxTokens: ENHANCE_MAX_TOKENS,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You refine negative prompts for image generation — comma-separated lists of things to exclude from an image. ' +
+            'Return ONLY the refined list: comma-separated terms, no sentences, no preamble, no explanation, no quotation marks, no line breaks. ' +
+            'Keep every term from the input (reword a term only for clarity), and add closely related exclusion terms that commonly belong with them — image quality, anatomy, and artifact terms. ' +
+            'Keep it under 60 terms.',
+        },
+        { role: 'user', content: negativePrompt },
+      ],
+    },
+  };
+}
+
 /** What a terminal enhance snapshot gave back. */
 export type EnhanceOutcome =
   | { type: 'text'; text: string }

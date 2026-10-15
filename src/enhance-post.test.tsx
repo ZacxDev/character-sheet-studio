@@ -15,6 +15,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { installMockMoneyHost } from './mock-buzz.js';
+import { Characters } from './screens/Characters.js';
 import { SheetBuilder } from './screens/SheetBuilder.js';
 import { SheetView } from './screens/SheetView.js';
 import {
@@ -208,6 +209,147 @@ describe('Builder prompt enhancement', () => {
     const notice = await screen.findByTestId('se-enhance-notice', {}, { timeout: 15_000 });
     expect(notice).toHaveTextContent(/didn’t come back/);
     expect(screen.queryByTestId('se-enhance-applied')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('Character prompt-field enhancement', () => {
+  let uninstall: (() => void) | undefined;
+  afterEach(() => {
+    uninstall?.();
+    uninstall = undefined;
+  });
+
+  type Outbound = { type?: string; payload?: unknown };
+
+  const openPromptsStep = async (
+    user: ReturnType<typeof userEvent.setup>,
+    library: SheetLibrary,
+  ) => {
+    render(
+      <Characters
+        library={library}
+        onBuildSheet={() => {}}
+        onViewSheets={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'New character' }));
+    await user.type(screen.getByTestId('char-name'), 'Nyx');
+    await user.click(screen.getByTestId('char-step-next'));
+    expect(screen.getByTestId('char-step-indicator')).toHaveTextContent('Prompts');
+  };
+
+  it('each field prices, confirms, and is replaced by its own rewrite', async () => {
+    const outbound: Outbound[] = [];
+    const saved: Character[] = [];
+    uninstall = installMockMoneyHost({
+      stepTextOutputs: [
+        'Nyx, a cyberpunk fox mercenary, lean build, silver-streaked fur, amber eyes',
+        'blurry, watermark, deformed hands, extra fingers, low quality',
+      ],
+      onOutbound: (msg) => {
+        outbound.push(msg as Outbound);
+      },
+    });
+    const user = userEvent.setup();
+    await openPromptsStep(
+      user,
+      stubLibrary({
+        saveCharacter: async (c) => {
+          saved.push(c);
+          return null;
+        },
+      }),
+    );
+
+    // Positive field: priced first — nothing submits before the confirm.
+    const positive = screen.getByTestId('char-positive-prompt') as HTMLTextAreaElement;
+    await user.type(positive, 'a cyberpunk fox mercenary');
+    await user.click(screen.getByTestId('char-enhance-positive'));
+    const confirm = await screen.findByTestId('char-enhance-confirm');
+    expect(confirm).toHaveTextContent(/8 Buzz/);
+    expect(
+      outbound.some(
+        (m) =>
+          m.type === 'SUBMIT_WORKFLOW' &&
+          (m.payload as { body?: { kind?: string } })?.body?.kind === 'step',
+      ),
+    ).toBe(false);
+    await user.click(screen.getByTestId('char-enhance-confirm-run'));
+    await screen.findByTestId('char-enhance-applied', {}, { timeout: 15_000 });
+    expect(positive.value).toBe(
+      'Nyx, a cyberpunk fox mercenary, lean build, silver-streaked fur, amber eyes',
+    );
+
+    // The step submit carried the field text as the user message.
+    const stepSubmits = outbound.filter(
+      (m) =>
+        m.type === 'SUBMIT_WORKFLOW' &&
+        (m.payload as { body?: { kind?: string } })?.body?.kind === 'step',
+    );
+    const posBody = (
+      stepSubmits[0]?.payload as {
+        body?: { params?: { messages?: { content: string }[] } };
+      }
+    )?.body;
+    expect(posBody?.params?.messages?.[1]?.content).toBe('a cyberpunk fox mercenary');
+
+    // Negative field: its own button, its own priced run.
+    const negative = screen.getByTestId('char-negative-prompt') as HTMLTextAreaElement;
+    await user.type(negative, 'blurry');
+    await user.click(screen.getByTestId('char-enhance-negative'));
+    await user.click(await screen.findByTestId('char-enhance-confirm-run'));
+    // The step runs through the adaptive poll loop — allow well beyond 1s.
+    await screen.findByTestId('char-enhance-applied', {}, { timeout: 15_000 });
+    expect(negative.value).toBe(
+      'blurry, watermark, deformed hands, extra fingers, low quality',
+    );
+
+    // Both rewrites persist on save.
+    for (let i = 0; i < 4; i++) await user.click(screen.getByTestId('char-step-next'));
+    await user.click(screen.getByTestId('char-save'));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0].description).toBe(
+      'Nyx, a cyberpunk fox mercenary, lean build, silver-streaked fur, amber eyes',
+    );
+    expect(saved[0].negativePrompt).toBe(
+      'blurry, watermark, deformed hands, extra fingers, low quality',
+    );
+  });
+
+  it('an empty field asks for text first and never prices', async () => {
+    const outbound: Outbound[] = [];
+    uninstall = installMockMoneyHost({
+      onOutbound: (msg) => {
+        outbound.push(msg as Outbound);
+      },
+    });
+    const user = userEvent.setup();
+    await openPromptsStep(user, stubLibrary());
+
+    await user.click(screen.getByTestId('char-enhance-negative'));
+    const notice = await screen.findByTestId('char-enhance-notice');
+    expect(notice).toHaveTextContent(/Write the prompt first/);
+    expect(outbound.some((m) => m.type === 'ESTIMATE_WORKFLOW')).toBe(false);
+  });
+
+  it('no text back: the field keeps the original wording', async () => {
+    uninstall = installMockMoneyHost({}); // no stepTextOutputs armed
+    const user = userEvent.setup();
+    await openPromptsStep(user, stubLibrary());
+
+    const positive = screen.getByTestId('char-positive-prompt') as HTMLTextAreaElement;
+    await user.type(positive, 'a fox mercenary');
+    await user.click(screen.getByTestId('char-enhance-positive'));
+    await user.click(await screen.findByTestId('char-enhance-confirm-run'));
+    const notice = await screen.findByTestId(
+      'char-enhance-notice',
+      {},
+      { timeout: 15_000 },
+    );
+    expect(notice).toHaveTextContent(/didn’t come back/);
+    expect(positive.value).toBe('a fox mercenary');
   });
 });
 

@@ -11,7 +11,9 @@ import type { BlockWorkflowSnapshot } from '@civitai/app-sdk/blocks';
 import {
   ENHANCE_MAX_TOKENS,
   ENHANCE_MODEL,
+  buildCharacterPromptEnhanceBody,
   buildEnhanceBody,
+  buildNegativePromptEnhanceBody,
   enhanceOutcomeFromSnapshot,
 } from './enhance.js';
 
@@ -40,6 +42,39 @@ describe('buildEnhanceBody', () => {
     expect(messages[0].content).toContain('verbatim');
     expect(messages[0].content).toContain('Return ONLY the rewritten prompt');
     expect(messages[1]).toEqual({ role: 'user', content: 'a knight, kaida_cyber, front view' });
+  });
+});
+
+describe('buildCharacterPromptEnhanceBody', () => {
+  it('rewrites the identity fragment without baking in a shot', () => {
+    const body = buildCharacterPromptEnhanceBody('a cyberpunk fox mercenary, nyx_fox');
+    if (!('step' in body) || body.step !== 'chat-completion') {
+      throw new Error('expected a chat-completion step body');
+    }
+    expect(body.params.model).toBe(ENHANCE_MODEL);
+    const messages = body.params.messages as { role: string; content: string }[];
+    // Fragment contract: identity preserved verbatim, no pose/scene added —
+    // panels supply those per image.
+    expect(messages[0].content).toContain('verbatim');
+    expect(messages[0].content).toContain('Do NOT add a pose');
+    expect(messages[1]).toEqual({
+      role: 'user',
+      content: 'a cyberpunk fox mercenary, nyx_fox',
+    });
+  });
+});
+
+describe('buildNegativePromptEnhanceBody', () => {
+  it('keeps the exclusion-list shape', () => {
+    const body = buildNegativePromptEnhanceBody('blurry, watermark');
+    if (!('step' in body) || body.step !== 'chat-completion') {
+      throw new Error('expected a chat-completion step body');
+    }
+    expect(body.params.model).toBe(ENHANCE_MODEL);
+    const messages = body.params.messages as { role: string; content: string }[];
+    expect(messages[0].content).toContain('comma-separated');
+    expect(messages[0].content).toContain('Keep every term from the input');
+    expect(messages[1]).toEqual({ role: 'user', content: 'blurry, watermark' });
   });
 });
 

@@ -5,18 +5,43 @@
 // (uploaded as a PRIVATE img2img source via the host), and a seed policy.
 // Everything persists through the sheet library (app storage, best-effort).
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { useImageUpload } from '@civitai/blocks-react';
+import {
+  useBlockContext,
+  useBlockToken,
+  useBuzzWorkflow,
+  useConsentUnavailable,
+  useImageUpload,
+  useRequestConsent,
+  useRequestSignIn,
+} from '@civitai/blocks-react';
 import {
   Alert,
   Button,
   Card,
   Group,
+  Loader,
   Stack,
   TextInput,
   Textarea,
 } from '@civitai/blocks-react/ui';
+import type { WorkflowBody } from '@civitai/app-sdk/blocks';
+
+import {
+  BUDGETED_SCOPE,
+  formatCost,
+  hasBudgetedScope,
+  isTerminalStatus,
+} from '../money/generation.js';
+import { startPollLoop } from '../money/pollLoop.js';
+import { idempotencyKeyFor } from '../sheet/batch.js';
+import {
+  buildCharacterPromptEnhanceBody,
+  buildNegativePromptEnhanceBody,
+  enhanceOutcomeFromSnapshot,
+  type EnhanceOutcome,
+} from '../sheet/enhance.js';
 
 import type {
   Character,
@@ -536,6 +561,183 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoi
     }
   };
 
+  // --- prompt enhancement (Prompts step) -------------------------------------
+  // One Enhance button per prompt field, through the same chat-completion
+  // step the Sheet Builder's panel enhancement uses, with the same money
+  // rules: price first, one confirm, submit only on confirm. A successful
+  // rewrite REPLACES the field's text outright — still editable, and
+  // nothing persists until the character is saved. Each field prices and
+  // runs separately; an empty field asks for text first.
+
+  const { ready, viewer } = useBlockContext();
+  const token = useBlockToken();
+  const { estimate, submit, poll } = useBuzzWorkflow();
+  const { requestSignIn } = useRequestSignIn();
+  const { requestConsent } = useRequestConsent();
+  const { refusal } = useConsentUnavailable();
+  const granted = hasBudgetedScope(token?.scopes);
+  const anon = ready && !viewer;
+
+  type PromptField = 'positive' | 'negative';
+  const [fxField, setFxField] = useState<PromptField | null>(null);
+  const [fxPhase, setFxPhase] = useState<'idle' | 'estimating' | 'confirming' | 'running'>('idle');
+  const [fxQuote, setFxQuote] = useState<number | null>(null);
+  const [fxNotice, setFxNotice] = useState<string | null>(null);
+  const [fxDone, setFxDone] = useState(false);
+  const [fxConsentWait, setFxConsentWait] = useState(false);
+  const fxIntentRef = useRef(false);
+  const fxRunRef = useRef(0);
+  const pollCancelsRef = useRef<Array<() => void>>([]);
+  const pollRef = useRef(poll);
+  pollRef.current = poll;
+  useEffect(() => {
+    const cancels = pollCancelsRef.current;
+    return () => {
+      for (const c of cancels) c();
+      cancels.length = 0;
+    };
+  }, []);
+
+  const fxBody = useCallback(
+    (field: PromptField): WorkflowBody =>
+      field === 'positive'
+        ? buildCharacterPromptEnhanceBody(description.trim())
+        : buildNegativePromptEnhanceBody(negativePrompt.trim()),
+    [description, negativePrompt],
+  );
+
+  const runFxWorkflow = useCallback(
+    (body: WorkflowBody, key: string): Promise<EnhanceOutcome> =>
+      new Promise((resolve) => {
+        let settled = false;
+        const done = (o: EnhanceOutcome) => {
+          if (!settled) {
+            settled = true;
+            resolve(o);
+          }
+        };
+        void (async () => {
+          try {
+            const snap = await submit(body, { idempotencyKey: key });
+            if (isTerminalStatus(snap.status)) {
+              done(
+                snap.status === 'succeeded'
+                  ? enhanceOutcomeFromSnapshot(snap)
+                  : { type: 'none' },
+              );
+              return;
+            }
+            const cancelLoop = startPollLoop(pollRef.current, snap.workflowId, {
+              onSnapshot: (s2) => {
+                if (s2.status === 'succeeded') done(enhanceOutcomeFromSnapshot(s2));
+                else if (isTerminalStatus(s2.status)) done({ type: 'none' });
+              },
+              onUnreachable: () => done({ type: 'none' }),
+            });
+            pollCancelsRef.current.push(cancelLoop);
+          } catch {
+            done({ type: 'none' });
+          }
+        })();
+      }),
+    [submit],
+  );
+
+  const estimateFx = useCallback(
+    async (field: PromptField) => {
+      setFxPhase('estimating');
+      setFxNotice(null);
+      setFxQuote(null);
+      setFxDone(false);
+      try {
+        const snap = await estimate(fxBody(field));
+        const cost = snap.cost?.total;
+        if (snap.status === 'failed' || snap.error || typeof cost !== 'number') {
+          setFxNotice('Couldn’t price the enhancement — your prompt is unchanged.');
+          setFxPhase('idle');
+          return;
+        }
+        setFxQuote(cost);
+        setFxPhase('confirming');
+      } catch {
+        setFxNotice('Couldn’t price the enhancement — your prompt is unchanged.');
+        setFxPhase('idle');
+      }
+    },
+    [estimate, fxBody],
+  );
+  const estimateFxRef = useRef(estimateFx);
+  estimateFxRef.current = estimateFx;
+
+  const startFxEnhance = (field: PromptField) => {
+    const text = field === 'positive' ? description : negativePrompt;
+    setFxField(field);
+    setFxNotice(null);
+    setFxDone(false);
+    if (text.trim() === '') {
+      setFxNotice('Write the prompt first, then enhance it.');
+      return;
+    }
+    if (anon) {
+      requestSignIn();
+      setFxNotice("You're browsing as a guest — sign in to enhance prompts.");
+      return;
+    }
+    if (!granted) {
+      fxIntentRef.current = true;
+      setFxConsentWait(true);
+      requestConsent({ scopes: [BUDGETED_SCOPE] });
+      return;
+    }
+    void estimateFxRef.current(field);
+  };
+
+  // Auto-resume enhancement pricing after a consent grant.
+  useEffect(() => {
+    if (granted && fxIntentRef.current && fxField) {
+      fxIntentRef.current = false;
+      setFxConsentWait(false);
+      void estimateFxRef.current(fxField);
+    }
+  }, [granted, fxField]);
+
+  useEffect(() => {
+    if (refusal && fxConsentWait) {
+      fxIntentRef.current = false;
+      setFxConsentWait(false);
+      setFxNotice(
+        'Spending approval isn’t available in this environment, so enhancement can’t run here.',
+      );
+    }
+  }, [refusal, fxConsentWait]);
+
+  const runFxSubmit = useCallback(async () => {
+    if (fxQuote == null || !fxField) {
+      setFxPhase('idle');
+      setFxQuote(null);
+      return;
+    }
+    const field = fxField;
+    setFxPhase('running');
+    fxRunRef.current += 1;
+    const outcome = await runFxWorkflow(
+      fxBody(field),
+      idempotencyKeyFor('enhance', `character-editor:${field}`, fxRunRef.current),
+    );
+    setFxQuote(null);
+    setFxPhase('idle');
+    if (outcome.type === 'text') {
+      if (field === 'positive') setDescription(outcome.text);
+      else setNegativePrompt(outcome.text);
+      setFxNotice(null);
+      setFxDone(true);
+    } else if (outcome.type === 'withheld') {
+      setFxNotice(`The enhancement was withheld: ${outcome.reason} Your prompt is unchanged.`);
+    } else {
+      setFxNotice('The enhancement didn’t come back — your prompt is unchanged.');
+    }
+  }, [fxField, fxQuote, fxBody, runFxWorkflow]);
+
   const onSave = async () => {
     setTouched(true);
     if (name.trim() === '') {
@@ -606,6 +808,78 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoi
     }
     setStep((s) => Math.min(lastStep, s + 1));
   };
+
+  // The Enhance row + its price-confirm / consent / notice alerts, rendered
+  // under each prompt field on the Prompts step.
+  const renderFx = (field: PromptField) => (
+    <Stack gap="xs">
+      <Group justify="flex-end">
+        <Button
+          variant="light"
+          color="grape"
+          size="sm"
+          onClick={() => startFxEnhance(field)}
+          loading={
+            fxField === field && (fxPhase === 'estimating' || fxPhase === 'running')
+          }
+          disabled={
+            fxPhase === 'confirming' ||
+            fxPhase === 'running' ||
+            (fxPhase === 'estimating' && fxField !== field)
+          }
+          data-testid={field === 'positive' ? 'char-enhance-positive' : 'char-enhance-negative'}
+        >
+          {fxField === field && fxPhase === 'running'
+            ? 'Enhancing…'
+            : fxField === field && fxPhase === 'estimating'
+              ? 'Pricing…'
+              : 'Enhance ✦'}
+        </Button>
+      </Group>
+      {fxField === field && fxConsentWait && (
+        <Alert color="info" data-testid="char-enhance-consent">
+          <Loader size="sm" /> Waiting for your approval in the Civitai dialog…
+        </Alert>
+      )}
+      {fxField === field && fxPhase === 'confirming' && fxQuote != null && (
+        <Alert color="info" data-testid="char-enhance-confirm">
+          <Stack gap="xs">
+            <span>Enhance this prompt · ≈{formatCost(fxQuote)} Buzz</span>
+            <Group justify="flex-end">
+              <Button
+                variant="subtle"
+                size="sm"
+                onClick={() => {
+                  setFxQuote(null);
+                  setFxPhase('idle');
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                color="grape"
+                size="sm"
+                onClick={() => void runFxSubmit()}
+                data-testid="char-enhance-confirm-run"
+              >
+                Enhance · {formatCost(fxQuote)} Buzz
+              </Button>
+            </Group>
+          </Stack>
+        </Alert>
+      )}
+      {fxField === field && fxDone && (
+        <Alert color="info" data-testid="char-enhance-applied">
+          Enhanced ✦ — the field above now holds the rewrite.
+        </Alert>
+      )}
+      {fxField === field && fxNotice && (
+        <Alert color="info" data-testid="char-enhance-notice">
+          {fxNotice}
+        </Alert>
+      )}
+    </Stack>
+  );
 
   return (
     <Card>
@@ -705,7 +979,10 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoi
                 label="Positive prompt"
                 placeholder="a cyberpunk fox mercenary, lean build, …"
                 value={description}
-                onChange={(e) => setDescription(e.currentTarget.value)}
+                onChange={(e) => {
+                  setDescription(e.currentTarget.value);
+                  if (fxField === 'positive') setFxDone(false);
+                }}
                 rows={3}
                 data-testid="char-positive-prompt"
               />
@@ -713,13 +990,17 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoi
                 Describe the character and the look you want. This text starts
                 every panel prompt for this character.
               </FieldHelp>
+              {renderFx('positive')}
             </Stack>
             <Stack gap="xs">
               <Textarea
                 label="Negative prompt (optional)"
                 placeholder="blurry, watermark, deformed"
                 value={negativePrompt}
-                onChange={(e) => setNegativePrompt(e.currentTarget.value)}
+                onChange={(e) => {
+                  setNegativePrompt(e.currentTarget.value);
+                  if (fxField === 'negative') setFxDone(false);
+                }}
                 rows={2}
                 data-testid="char-negative-prompt"
               />
@@ -727,6 +1008,7 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoi
                 Optional — list anything to keep out of the images. Leave this
                 blank if you do not need one; it is not required.
               </FieldHelp>
+              {renderFx('negative')}
             </Stack>
           </Stack>
         )}
