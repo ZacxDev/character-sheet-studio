@@ -52,7 +52,12 @@ import { newCharacter } from '../sheet/types.js';
 import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
 import { characterImageUrls, characterProfileUrl } from '../sheet/profile.js';
 import { parseListInput, storeErrorMessage } from './common.js';
-import { randomCharacter, randomName } from './random-character.js';
+import {
+  randomDescription,
+  randomName,
+  randomTraits,
+  randomTriggerWord,
+} from './random-character.js';
 
 type EditorState = { mode: 'create' } | { mode: 'edit'; id: string } | null;
 
@@ -129,6 +134,30 @@ function DiceIcon() {
       <circle cx="15.5" cy="8.5" r="1.3" fill="currentColor" stroke="none" />
       <circle cx="8.5" cy="15.5" r="1.3" fill="currentColor" stroke="none" />
     </svg>
+  );
+}
+
+/** Per-field randomize: a dice icon button that re-rolls ONE form field. */
+function DiceButton({
+  label,
+  testid,
+  onRoll,
+}: {
+  label: string;
+  testid: string;
+  onRoll: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="css-icon-btn"
+      style={{ width: 34, height: 34 }}
+      aria-label={label}
+      data-testid={testid}
+      onClick={onRoll}
+    >
+      <DiceIcon />
+    </button>
   );
 }
 
@@ -229,6 +258,8 @@ export function Characters({
   const [editor, setEditor] = useState<EditorState>(initialEditor ?? null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Bumped to remount (reset) the inline empty-state create form on Cancel.
+  const [inlineNonce, setInlineNonce] = useState(0);
 
   const openEditor = (next: Exclude<EditorState, null>) => {
     setEditor(next);
@@ -328,26 +359,47 @@ export function Characters({
     );
   }
 
+  const isEmpty = library.ready && library.characters.length === 0;
+
   return (
     <Stack gap="md">
-      <Group justify="flex-end" align="center">
-        <Button size="sm" variant="light" onClick={() => openEditor({ mode: 'create' })}>
-          New character
-        </Button>
-      </Group>
+      {!isEmpty && (
+        <Group justify="flex-end" align="center">
+          <Button size="sm" variant="light" onClick={() => openEditor({ mode: 'create' })}>
+            New character
+          </Button>
+        </Group>
+      )}
 
       {deleteError && <Alert color="error">{deleteError}</Alert>}
 
-      {library.characters.length === 0 && (
-        <Card>
-          <p style={{ margin: 0, opacity: 0.75 }}>
-            No characters yet. Create one — give it a description, some traits,
-            and optionally a reference portrait — then build a sheet from it.
-          </p>
-        </Card>
-      )}
+      {isEmpty ? (
+        // Empty state: the create form itself, right on the page — no
+        // "New character" click stands between a first-time viewer and
+        // their first character. Cancel re-rolls a fresh form in place.
+        <CharacterEditor
+          key={`inline-create-${inlineNonce}`}
+          initial={undefined}
+          onClose={() => {
+            setInlineNonce((n) => n + 1);
+            onCreateCancelled?.();
+          }}
+          onSaved={(saved) => onCreated?.(saved.id)}
+          saveCharacter={library.saveCharacter}
+          profileChoices={[]}
+        />
+      ) : (
+        <>
+          {!library.ready && library.characters.length === 0 && (
+            <Card>
+              <p style={{ margin: 0, opacity: 0.75 }}>
+                No characters yet. Create one — give it a description, some traits,
+                and optionally a reference portrait — then build a sheet from it.
+              </p>
+            </Card>
+          )}
 
-      <div className="css-grid-cards">
+          <div className="css-grid-cards">
         {library.characters.map((c) => {
           const sheetCount = sheetsByCharacter.get(c.id) ?? 0;
           const thumbs = thumbsByCharacter.get(c.id) ?? [];
@@ -458,7 +510,9 @@ export function Characters({
             </Card>
           );
         })}
-      </div>
+          </div>
+        </>
+      )}
     </Stack>
   );
 }
@@ -500,7 +554,9 @@ function FieldHelp({ children }: { children: string }) {
 }
 
 function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoices }: EditorProps) {
-  const [name, setName] = useState(initial?.name ?? '');
+  // Create opens with a rolled name already in the field — the name dice
+  // re-rolls it, and every other randomizable field has its own dice.
+  const [name, setName] = useState(initial?.name ?? randomName());
   const [description, setDescription] = useState(initial?.description ?? '');
   const [traits, setTraits] = useState((initial?.traits ?? []).join(', '));
   const [triggerWords, setTriggerWords] = useState((initial?.triggerWords ?? []).join(', '));
@@ -512,36 +568,9 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoi
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
-  const [confirmRandomize, setConfirmRandomize] = useState(false);
   const [step, setStep] = useState(0);
 
   const isCreate = !initial;
-
-  /** Fields a randomize would overwrite — everything except the name. */
-  const formDirty =
-    description.trim() !== '' ||
-    traits.trim() !== '' ||
-    triggerWords.trim() !== '' ||
-    negativePrompt.trim() !== '';
-
-  const applyRandomize = () => {
-    const rc = randomCharacter();
-    setName(rc.name);
-    setDescription(rc.description);
-    setTraits(rc.traits.join(', '));
-    setTriggerWords(rc.triggerWord);
-    setConfirmRandomize(false);
-  };
-
-  const onRandomize = () => {
-    // Overwriting typed work is a decision, not a side effect: when any
-    // non-name field already has input, ask first; otherwise just roll.
-    if (formDirty && !confirmRandomize) {
-      setConfirmRandomize(true);
-      return;
-    }
-    applyRandomize();
-  };
 
   // PRIVATE img2img source: unscanned, never displayed publicly by the host —
   // the url feeds straight into a workflow body's sourceImages.
@@ -886,49 +915,10 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoi
       <Stack gap="sm">
         <Group justify="space-between" align="center">
           <h3 style={{ margin: 0 }}>{initial ? 'Edit character' : 'New character'}</h3>
-          <Group gap="sm">
-            <Button
-              size="sm"
-              variant="light"
-              onClick={onRandomize}
-              data-testid="char-randomize"
-            >
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <DiceIcon /> Randomize
-              </span>
-            </Button>
-            <Button size="sm" variant="subtle" onClick={onClose}>
-              Cancel
-            </Button>
-          </Group>
+          <Button size="sm" variant="subtle" onClick={onClose}>
+            Cancel
+          </Button>
         </Group>
-
-        {confirmRandomize && (
-          <Alert color="warning">
-            <Group justify="space-between" align="center" wrap>
-              <span>
-                Replace the description, traits, and trigger words you’ve
-                typed with a random character?
-              </span>
-              <Group gap="sm">
-                <Button
-                  size="sm"
-                  onClick={applyRandomize}
-                  data-testid="char-randomize-confirm"
-                >
-                  Replace fields
-                </Button>
-                <Button
-                  size="sm"
-                  variant="subtle"
-                  onClick={() => setConfirmRandomize(false)}
-                >
-                  Keep mine
-                </Button>
-              </Group>
-            </Group>
-          </Alert>
-        )}
 
         {error && <Alert color="error">{error}</Alert>}
 
@@ -953,16 +943,11 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoi
                 />
               </div>
               {isCreate && (
-                <button
-                  type="button"
-                  className="css-icon-btn"
-                  style={{ width: 34, height: 34 }}
-                  aria-label="Random name"
-                  data-testid="char-name-dice"
-                  onClick={() => setName(randomName())}
-                >
-                  <DiceIcon />
-                </button>
+                <DiceButton
+                  label="Random name"
+                  testid="char-name-dice"
+                  onRoll={() => setName(randomName())}
+                />
               )}
             </Group>
             <FieldHelp>
@@ -975,17 +960,31 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoi
         {stepKey === 'prompts' && (
           <Stack gap="sm">
             <Stack gap="xs">
-              <Textarea
-                label="Positive prompt"
-                placeholder="a cyberpunk fox mercenary, lean build, …"
-                value={description}
-                onChange={(e) => {
-                  setDescription(e.currentTarget.value);
-                  if (fxField === 'positive') setFxDone(false);
-                }}
-                rows={3}
-                data-testid="char-positive-prompt"
-              />
+              <Group gap="xs" align="flex-end" wrap={false}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <Textarea
+                    label="Positive prompt"
+                    placeholder="a cyberpunk fox mercenary, lean build, …"
+                    value={description}
+                    onChange={(e) => {
+                      setDescription(e.currentTarget.value);
+                      if (fxField === 'positive') setFxDone(false);
+                    }}
+                    rows={3}
+                    data-testid="char-positive-prompt"
+                  />
+                </div>
+                {isCreate && (
+                  <DiceButton
+                    label="Random positive prompt"
+                    testid="char-positive-dice"
+                    onRoll={() => {
+                      setDescription(randomDescription());
+                      if (fxField === 'positive') setFxDone(false);
+                    }}
+                  />
+                )}
+              </Group>
               <FieldHelp>
                 Describe the character and the look you want. This text starts
                 every panel prompt for this character.
@@ -1015,13 +1014,24 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoi
 
         {stepKey === 'traits' && (
           <Stack gap="xs">
-            <TextInput
-              label="Traits (comma-separated)"
-              placeholder="silver-streaked fur, glowing amber eyes"
-              value={traits}
-              onChange={(e) => setTraits(e.currentTarget.value)}
-              data-testid="char-traits"
-            />
+            <Group gap="xs" align="flex-end" wrap={false}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <TextInput
+                  label="Traits (comma-separated)"
+                  placeholder="silver-streaked fur, glowing amber eyes"
+                  value={traits}
+                  onChange={(e) => setTraits(e.currentTarget.value)}
+                  data-testid="char-traits"
+                />
+              </div>
+              {isCreate && (
+                <DiceButton
+                  label="Random traits"
+                  testid="char-traits-dice"
+                  onRoll={() => setTraits(randomTraits().join(', '))}
+                />
+              )}
+            </Group>
             <FieldHelp>
               Fixed details that should stay consistent, separated by commas —
               species, hair, eyes, markings, or signature clothing.
@@ -1031,13 +1041,24 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoi
 
         {stepKey === 'triggers' && (
           <Stack gap="xs">
-            <TextInput
-              label="Trigger words (comma-separated)"
-              placeholder="nyx_fox"
-              value={triggerWords}
-              onChange={(e) => setTriggerWords(e.currentTarget.value)}
-              data-testid="char-trigger-words"
-            />
+            <Group gap="xs" align="flex-end" wrap={false}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <TextInput
+                  label="Trigger words (comma-separated)"
+                  placeholder="nyx_fox"
+                  value={triggerWords}
+                  onChange={(e) => setTriggerWords(e.currentTarget.value)}
+                  data-testid="char-trigger-words"
+                />
+              </div>
+              {isCreate && (
+                <DiceButton
+                  label="Random trigger word"
+                  testid="char-triggers-dice"
+                  onRoll={() => setTriggerWords(randomTriggerWord())}
+                />
+              )}
+            </Group>
             <FieldHelp>
               Words that switch on this character’s look, usually from their
               LoRA. They are added to every prompt for this character.

@@ -46,10 +46,10 @@ describe('App shell smoke test', () => {
       ).toBeInTheDocument();
     }
 
-    // Characters is the default page: empty-state copy.
-    await waitFor(() =>
-      expect(screen.getByText(/No characters yet/)).toBeInTheDocument(),
-    );
+    // Characters is the default page: with no characters, the create form
+    // itself is the empty state (name pre-rolled).
+    const emptyName = await screen.findByTestId('char-name');
+    expect((emptyName as HTMLInputElement).value).not.toBe('');
 
     // Stacks page.
     await user.click(screen.getByRole('button', { name: 'Stacks' }));

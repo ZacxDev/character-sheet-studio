@@ -310,7 +310,9 @@ export function App() {
                 onEditorClosed={() => navigateTo('characters')}
                 onCreated={(id) => {
                   if (returnToBuilder !== 'character') {
-                    navigateTo('characters');
+                    // A finished create lands on the new character's own
+                    // page — details, sheets, and the New sheet CTA.
+                    navigateTo(characterRoute(id));
                     return;
                   }
                   setReturnToBuilder(null);

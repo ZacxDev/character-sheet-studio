@@ -93,16 +93,30 @@ export function triggerWordFor(name: string): string {
     .replace(/^_+|_+$/g, '');
 }
 
+/** Roll one description line: era + being + role + a characterful detail. */
+export function randomDescription(rand: Rng = Math.random): string {
+  const era = pick(rand, ERAS);
+  const article = /^[aeiou]/i.test(era) ? 'an' : 'a';
+  return `${article} ${era} ${pick(rand, BEINGS)} ${pick(rand, ROLES)}, ${pick(rand, DETAILS)}`;
+}
+
+/** Roll three distinct appearance traits. */
+export function randomTraits(rand: Rng = Math.random): string[] {
+  return pickN(rand, TRAITS, 3);
+}
+
+/** Roll a standalone trigger-word slug (derived from a fresh random name). */
+export function randomTriggerWord(rand: Rng = Math.random): string {
+  return triggerWordFor(randomName(rand));
+}
+
 /** Roll a whole character: name, one-line description, 3 traits, trigger. */
 export function randomCharacter(rand: Rng = Math.random): RandomCharacter {
   const name = randomName(rand);
-  const era = pick(rand, ERAS);
-  const article = /^[aeiou]/i.test(era) ? 'an' : 'a';
-  const description = `${article} ${era} ${pick(rand, BEINGS)} ${pick(rand, ROLES)}, ${pick(rand, DETAILS)}`;
   return {
     name,
-    description,
-    traits: pickN(rand, TRAITS, 3),
+    description: randomDescription(rand),
+    traits: randomTraits(rand),
     triggerWord: triggerWordFor(name),
   };
 }

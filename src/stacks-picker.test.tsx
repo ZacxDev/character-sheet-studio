@@ -1057,9 +1057,6 @@ describe('Character form randomizer + seed toggle', () => {
       />,
     );
 
-  const field = (label: string) =>
-    screen.getByLabelText(label, { exact: false }) as HTMLInputElement | HTMLTextAreaElement;
-
   const nextStep = async (
     user: ReturnType<typeof userEvent.setup>,
     times = 1,
@@ -1069,13 +1066,14 @@ describe('Character form randomizer + seed toggle', () => {
     }
   };
 
-  it('name dice appears in create mode only and fills the name', async () => {
+  it('create opens with a prefilled random name; the name dice re-rolls it (create only)', async () => {
     const user = userEvent.setup();
     renderCharacters();
 
     await user.click(screen.getByRole('button', { name: 'New character' }));
     const nameInput = screen.getByTestId('char-name') as HTMLInputElement;
-    expect(nameInput.value).toBe('');
+    // The name arrives pre-rolled — no empty first field to fill in.
+    expect(nameInput.value).not.toBe('');
     await user.click(screen.getByTestId('char-name-dice'));
     expect(nameInput.value).not.toBe('');
 
@@ -1086,43 +1084,90 @@ describe('Character form randomizer + seed toggle', () => {
     expect(screen.queryByTestId('char-name-dice')).not.toBeInTheDocument();
   });
 
-  it('randomize fills a clean form in one click', async () => {
+  it('per-field dice fill only their own field', async () => {
     const user = userEvent.setup();
     renderCharacters();
     await user.click(screen.getByRole('button', { name: 'New character' }));
-    await user.click(screen.getByTestId('char-randomize'));
 
-    expect((screen.getByTestId('char-name') as HTMLInputElement).value).not.toBe('');
+    // The all-at-once Randomize button is gone.
+    expect(screen.queryByTestId('char-randomize')).not.toBeInTheDocument();
+
     await nextStep(user);
-    expect(field('Positive prompt').value).toMatch(/^an? /);
-    // The negative prompt is a separate, clearly optional field on the same
-    // step; randomize does not invent one.
-    expect(field('Negative prompt (optional)').value).toBe('');
+    await user.click(screen.getByTestId('char-positive-dice'));
+    expect(
+      (screen.getByTestId('char-positive-prompt') as HTMLTextAreaElement).value,
+    ).toMatch(/^an? /);
+    // The negative prompt has no dice — a roll never invents one.
+    expect(screen.queryByTestId('char-negative-dice')).not.toBeInTheDocument();
+    expect(
+      (screen.getByTestId('char-negative-prompt') as HTMLTextAreaElement).value,
+    ).toBe('');
+
     await nextStep(user);
-    expect(field('Traits').value).not.toBe('');
+    await user.click(screen.getByTestId('char-traits-dice'));
+    expect((screen.getByTestId('char-traits') as HTMLInputElement).value).not.toBe('');
+
     await nextStep(user);
-    expect(field('Trigger words').value).not.toBe('');
-    // No confirm was needed — nothing of the user's was overwritten.
-    expect(screen.queryByTestId('char-randomize-confirm')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('char-triggers-dice'));
+    expect(
+      (screen.getByTestId('char-trigger-words') as HTMLInputElement).value,
+    ).toMatch(/^[a-z0-9_]+$/);
   });
 
-  it('randomize asks before replacing typed fields', async () => {
+  it('a field dice replaces that field only, with no confirm', async () => {
     const user = userEvent.setup();
     renderCharacters();
     await user.click(screen.getByRole('button', { name: 'New character' }));
-    await user.type(screen.getByTestId('char-name'), 'Mine');
     await nextStep(user);
-    await user.type(field('Positive prompt'), 'my own concept');
+    await user.type(screen.getByTestId('char-positive-prompt'), 'my own concept');
+    await nextStep(user);
+    await user.type(screen.getByTestId('char-traits'), 'my own trait');
 
-    await user.click(screen.getByTestId('char-randomize'));
-    // Confirm shows and nothing has changed yet.
-    expect(await screen.findByTestId('char-randomize-confirm')).toBeInTheDocument();
-    expect(field('Positive prompt').value).toBe('my own concept');
-
-    await user.click(screen.getByTestId('char-randomize-confirm'));
-    expect(field('Positive prompt').value).toMatch(/^an? /);
+    await user.click(screen.getByTestId('char-traits-dice'));
+    // Replaced immediately, no confirm, and the other field is untouched.
+    expect((screen.getByTestId('char-traits') as HTMLInputElement).value).not.toBe(
+      'my own trait',
+    );
+    expect(screen.queryByTestId('char-randomize-confirm')).not.toBeInTheDocument();
     await user.click(screen.getByTestId('char-step-back'));
-    expect((screen.getByTestId('char-name') as HTMLInputElement).value).not.toBe('');
+    expect(
+      (screen.getByTestId('char-positive-prompt') as HTMLTextAreaElement).value,
+    ).toBe('my own concept');
+  });
+
+  it('empty character list shows the create form inline, prefilled', async () => {
+    const user = userEvent.setup();
+    const onCreated = vi.fn();
+    const saved: Character[] = [];
+    render(
+      <Characters
+        library={stubLibrary({
+          characters: [],
+          saveCharacter: async (c) => {
+            saved.push(c);
+            return null;
+          },
+        })}
+        onBuildSheet={() => {}}
+        onViewSheets={() => {}}
+        onCreated={onCreated}
+      />,
+    );
+
+    // No click needed: the form is the empty state, name already rolled,
+    // and the now-redundant New character button is gone.
+    const nameInput = await screen.findByTestId('char-name');
+    expect((nameInput as HTMLInputElement).value).not.toBe('');
+    expect(
+      screen.queryByRole('button', { name: 'New character' }),
+    ).not.toBeInTheDocument();
+
+    // Saving from the inline form reports the new character upward (the
+    // shell lands the viewer on its details page).
+    await nextStep(user, 5);
+    await user.click(screen.getByTestId('char-save'));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(onCreated).toHaveBeenCalledWith(saved[0].id);
   });
 
   it('seed policy is a toggle switch, not a select', async () => {
