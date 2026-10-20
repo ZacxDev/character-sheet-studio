@@ -1,10 +1,10 @@
 /**
  * Character Sheet Studio — data model + storage key scheme.
  *
- * Everything the app persists lives in the host-mediated `useAppStorage` KV
- * store (see `./store.ts`). The store is namespaced per (block instance,
- * viewer) and budgeted per (app, viewer); rows are small on purpose — ids,
- * prompts and Civitai-hosted urls, never image bytes.
+ * Everything the app persists lives in the document store's private `kv`
+ * collection (see `./kv-store.ts` and `./store.ts`): one key space and one
+ * budget per (app, viewer); documents are small on purpose — ids, prompts and
+ * Civitai-hosted urls, never image bytes (the store caps a document at 64 KiB).
  *
  * Key scheme (versioned, Prompt Lab / Style Explorer convention):
  *   v1:char:<uuid>     one Character
@@ -12,8 +12,9 @@
  *   v1:sheet:<uuid>    one SheetJob (a batch of panels + their workflow ids)
  *   v1:settings        SheetSettings singleton
  *
- * Keys are constructed here, never from user input, so they stay far under
- * the host's 200-character key cap. Malformed rows are dropped by the
+ * Keys are constructed here, never from user input, so they stay inside the
+ * document store's key rule (`^[A-Za-z0-9._:-]{1,128}$`). 🔴 They are also the
+ * legacy KV keys verbatim — the cutover copy depends on that; never rename one. Malformed rows are dropped by the
  * `normalize*` functions — storage is best-effort, the in-memory state is the
  * source of truth.
  */

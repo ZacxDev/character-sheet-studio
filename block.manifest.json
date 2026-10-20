@@ -1,7 +1,7 @@
 {
   "$schema": "https://civitai.com/schemas/app-block/v1.json",
   "blockId": "character-sheet-studio",
-  "version": "0.1.30",
+  "version": "0.2.0",
   "name": "Character Sheet Studio",
   "tagline": "Build a full character sheet in one batch — front, side, back, expressions and poses, priced before you generate.",
   "description": "Character Sheet Studio turns one character into a complete model sheet. Define the character once (description, traits, trigger words, an optional reference portrait), pair them with a model + LoRA stack, then generate the panels a sheet needs — front, side, back, three-quarter, expressions, poses, details — as one batch. Every run is priced in Buzz before anything is submitted, sheets resume if you leave mid-run, and any finished panel can be posted straight to your Civitai profile. Characters, stacks, and sheets persist in your private library.",
@@ -9,15 +9,18 @@
   "type": "block",
   "scopes": [
     "ai:write:budgeted",
-    "apps:storage:read",
-    "apps:storage:write",
+    "apps:storage",
     "posts:write:self"
   ],
   "scopeJustifications": {
     "ai:write:budgeted": "Runs image generations on the user's behalf, spending from the per-generation Buzz budget the page grants.",
-    "apps:storage:read": "Loads the viewer's saved characters, model stacks, and sheets from the app's per-viewer datastore.",
-    "apps:storage:write": "Persists the viewer's characters, model stacks, and sheets to the app's per-viewer datastore.",
+    "apps:storage": "Saves and loads the viewer's own characters, model stacks, sheets and settings in a private collection that only that viewer can read.",
     "posts:write:self": "Publishes a Civitai post to the viewer's own profile from images they generated in this app, only when they tap Post and approve the host's per-post confirmation."
+  },
+  "storage": {
+    "collections": {
+      "kv": { "visibility": "private" }
+    }
   },
   "page": {
     "path": "/",
@@ -29,8 +32,7 @@
     "minHeight": 600,
     "maxHeight": 4000,
     "resizable": true,
-    "sandbox": "allow-scripts allow-forms",
-    "src": "https://character-sheet-studio.civit.ai/"
+    "sandbox": "allow-scripts allow-forms"
   },
   "contentRating": "g",
   "bootSkeleton": true,

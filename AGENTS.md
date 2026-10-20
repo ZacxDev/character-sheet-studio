@@ -113,6 +113,13 @@ your own script under one of them, yours is what runs.
   on the plain install. Pins are untouched; the committed lockfile is what the
   platform builds from (`npm ci`).
 - Storage layer lives in `src/sheet/`: `types.ts` (data model, key scheme,
-  normalizers), `store.ts` (`SheetStore` on `useAppStorage`), `useSheetLibrary.ts`
-  (React binding, hydrate-once + best-effort persist). Sheets persist every
+  normalizers), `kv-store.ts` (get/set/delete/list over the document store's
+  PRIVATE `kv` collection — its key and `{ value }` wrapping are a contract with
+  the cutover copy script; read its header before touching it), `doc-storage.ts`
+  (the `@civitai/sdk` client in token mode over the bridge's block token + host
+  origin; tests/harness swap in `createFakeStorage`), `store.ts` (`SheetStore`),
+  `useSheetLibrary.ts` (React binding, hydrate-once + best-effort persist; an
+  anonymous viewer is never sent to the store). Since 0.2.0 nothing reaches the
+  legacy `useAppStorage` / `/blocks/app-storage/*` store; `src/test-setup.ts`
+  fails any test that does. Sheets persist every
   panel's `workflowId` — that is the resumability anchor.

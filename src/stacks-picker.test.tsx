@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event';
 
 import { App } from './App.js';
 import { installMockMoneyHost } from './mock-buzz.js';
+import { seedKv } from './sheet/fake-doc-storage.js';
+import { testDocStore } from './test-doc-store.js';
 import { Characters } from './screens/Characters.js';
 import { SheetBuilder } from './screens/SheetBuilder.js';
 import { SheetView } from './screens/SheetView.js';
@@ -83,7 +85,9 @@ describe('stack picker + builder funnel', () => {
         updatedAt: '2026-10-01T22:00:00.000Z',
       },
     };
-    uninstall = installMockMoneyHost({ storage: { seed } });
+    // Seeded in the copy script's shape (private `kv`, legacy key, `{ value }`).
+    await seedKv(testDocStore(), seed);
+    uninstall = installMockMoneyHost();
     const user = userEvent.setup();
     render(<App />);
     await screen.findByRole('button', { name: 'Characters' });
@@ -500,7 +504,9 @@ describe('Character drill-in, sheet previews, generation skeleton', () => {
       },
       'v1:sheet:sheet-1': sheetWithDonePanel,
     };
-    uninstall = installMockMoneyHost({ storage: { seed } });
+    // Seeded in the copy script's shape (private `kv`, legacy key, `{ value }`).
+    await seedKv(testDocStore(), seed);
+    uninstall = installMockMoneyHost();
     const user = userEvent.setup();
     render(<App />);
     await screen.findByRole('button', { name: 'Characters' });
@@ -645,7 +651,9 @@ describe('Batch B/C leftovers', () => {
         ],
       },
     };
-    uninstall = installMockMoneyHost({ storage: { seed } });
+    // Seeded in the copy script's shape (private `kv`, legacy key, `{ value }`).
+    await seedKv(testDocStore(), seed);
+    uninstall = installMockMoneyHost();
     const user = userEvent.setup();
     render(<App />);
     await screen.findByRole('button', { name: 'Characters' });
