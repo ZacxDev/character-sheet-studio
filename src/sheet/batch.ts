@@ -16,7 +16,26 @@ import type { PricedFailureKind } from '../money/generation.js';
 export const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
- * The STABLE idempotency key for one panel's submit: `sheetId-panelId-nonce`.
+ * FNV-1a 128-bit over the UTF-16 code units, hex-encoded. Deterministic, no
+ * dependencies — enough to compress two UUIDs + a nonce into a fixed-length,
+ * host-compliant idempotency key. (The host only ever sees the key; the ids
+ * themselves stay in storage where we can recompute from.)
+ */
+function fnv1a128Hex(input: string): string {
+  const OFFSET = 0x6c62272e07bb014262b821756295c58dn;
+  const PRIME = 0x0000000001000000000000000000013bn;
+  const MASK = (1n << 128n) - 1n;
+  let hash = OFFSET;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= BigInt(input.charCodeAt(i));
+    hash = (hash * PRIME) & MASK;
+  }
+  return hash.toString(16).padStart(32, '0');
+}
+
+/**
+ * The STABLE idempotency key for one panel's submit: `k-<128-bit hash of
+ * sheetId + panelId + nonce>`.
  *
  * Retrying a submit whose response was lost MUST reuse this exact key (same
  * nonce) so the host + orchestrator collapse it to ONE Buzz charge instead of
@@ -24,11 +43,13 @@ export const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
  * from ids the sheet already persists, so it survives tab closes and
  * re-renders unchanged. A regenerate bumps the nonce → a new logical submit.
  *
- * The separator is `-`, not `:` — the host rejects anything outside
- * {@link IDEMPOTENCY_KEY_PATTERN} with a 400.
+ * Why a hash: sheet/panel ids are UUIDs (36 chars each), so joining them
+ * literally yields a 75-char key — over the host's {@link IDEMPOTENCY_KEY_PATTERN}
+ * 64-char cap (and raw colons are outside the charset entirely). The key is a
+ * fixed 34 chars for any ids, deterministic across calls.
  */
 export function idempotencyKeyFor(sheetId: string, panelId: string, nonce = 0): string {
-  return `${sheetId}-${panelId}-${nonce}`;
+  return `k-${fnv1a128Hex(`${sheetId}:${panelId}:${nonce}`)}`;
 }
 
 /**

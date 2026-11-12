@@ -7,14 +7,19 @@
  * and return a `StoreErrorKind` (`null` on success) so the UI can surface
  * quota failures honestly instead of pretending the save landed.
  *
- * Anonymous viewers read `null` from storage and reject writes — for them
- * everything lives in memory for the session.
+ * The store is the document store's private `kv` collection, which REFUSES an
+ * anonymous viewer (`sign_in_required`). So nothing is read until the host has
+ * said who the viewer is, and an anonymous viewer is never sent to the store
+ * at all: their library lives in memory for the session, and a save answers
+ * 'unknown' — the same kind the legacy store's anonymous-write rejection
+ * classified to — without a request.
  */
 
-import { useAppStorage } from '@civitai/blocks-react';
+import { useBlockContext } from '@civitai/blocks-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { AppStorageQuota } from '@civitai/blocks-react';
 
+import { useDocumentStorage } from './doc-storage.js';
+import { createKvStorage, type KvQuota } from './kv-store.js';
 import { SheetStore, classifyStoreError, type StoreErrorKind } from './store.js';
 import {
   DEFAULT_SETTINGS,
@@ -33,7 +38,7 @@ export interface SheetLibrary {
   stacks: ModelStack[];
   sheets: SheetJob[];
   settings: SheetSettings;
-  quota: AppStorageQuota | null;
+  quota: KvQuota | null;
   saveCharacter: (c: Character) => Promise<StoreErrorKind | null>;
   deleteCharacter: (id: string) => Promise<StoreErrorKind | null>;
   saveStack: (s: ModelStack) => Promise<StoreErrorKind | null>;
@@ -46,17 +51,31 @@ export interface SheetLibrary {
 }
 
 export function useSheetLibrary(): SheetLibrary {
-  const storage = useAppStorage();
-  const store = useMemo(() => new SheetStore(storage), [storage]);
+  const { ready: hostReady, viewer } = useBlockContext();
+  const signedIn = hostReady && viewer !== null;
+  const docs = useDocumentStorage();
+  // `null` while the viewer is anonymous (or not known yet), or while the host
+  // origin / token have not arrived: nothing can reach the store then.
+  const store = useMemo(
+    () => (signedIn && docs ? new SheetStore(createKvStorage(docs)) : null),
+    [signedIn, docs],
+  );
 
   const [ready, setReady] = useState(false);
   const [characters, setCharacters] = useState<Character[]>([]);
   const [stacks, setStacks] = useState<ModelStack[]>([]);
   const [sheets, setSheets] = useState<SheetJob[]>([]);
   const [settings, setSettings] = useState<SheetSettings>(DEFAULT_SETTINGS);
-  const [quota, setQuota] = useState<AppStorageQuota | null>(null);
+  const [quota, setQuota] = useState<KvQuota | null>(null);
 
   useEffect(() => {
+    if (!hostReady) return;
+    if (store === null) {
+      // Anonymous: in-memory only. (Signed in but no origin/token yet: wait —
+      // the effect re-runs when the store appears.)
+      if (!signedIn) setReady(true);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -82,11 +101,12 @@ export function useSheetLibrary(): SheetLibrary {
     return () => {
       cancelled = true;
     };
-  }, [store]);
+  }, [store, hostReady, signedIn]);
 
   const saveCharacter = useCallback(
     async (c: Character): Promise<StoreErrorKind | null> => {
       setCharacters((cur) => upsertById(cur, c));
+      if (store === null) return 'unknown';
       try {
         await store.saveCharacter(c);
         return null;
@@ -100,6 +120,7 @@ export function useSheetLibrary(): SheetLibrary {
   const deleteCharacter = useCallback(
     async (id: string): Promise<StoreErrorKind | null> => {
       setCharacters((cur) => removeById(cur, id));
+      if (store === null) return 'unknown';
       try {
         await store.deleteCharacter(id);
         return null;
@@ -113,6 +134,7 @@ export function useSheetLibrary(): SheetLibrary {
   const saveStack = useCallback(
     async (s: ModelStack): Promise<StoreErrorKind | null> => {
       setStacks((cur) => upsertById(cur, s));
+      if (store === null) return 'unknown';
       try {
         await store.saveStack(s);
         return null;
@@ -126,6 +148,7 @@ export function useSheetLibrary(): SheetLibrary {
   const deleteStack = useCallback(
     async (id: string): Promise<StoreErrorKind | null> => {
       setStacks((cur) => removeById(cur, id));
+      if (store === null) return 'unknown';
       try {
         await store.deleteStack(id);
         return null;
@@ -139,6 +162,7 @@ export function useSheetLibrary(): SheetLibrary {
   const saveSheet = useCallback(
     async (s: SheetJob): Promise<StoreErrorKind | null> => {
       setSheets((cur) => upsertById(cur, s));
+      if (store === null) return 'unknown';
       try {
         await store.saveSheet(s);
         return null;
@@ -152,6 +176,7 @@ export function useSheetLibrary(): SheetLibrary {
   const deleteSheet = useCallback(
     async (id: string): Promise<StoreErrorKind | null> => {
       setSheets((cur) => removeById(cur, id));
+      if (store === null) return 'unknown';
       try {
         await store.deleteSheet(id);
         return null;
@@ -165,6 +190,7 @@ export function useSheetLibrary(): SheetLibrary {
   const saveSettings = useCallback(
     async (s: SheetSettings): Promise<StoreErrorKind | null> => {
       setSettings(s);
+      if (store === null) return 'unknown';
       try {
         await store.saveSettings(s);
         return null;
@@ -176,6 +202,7 @@ export function useSheetLibrary(): SheetLibrary {
   );
 
   const refreshQuota = useCallback(async (): Promise<void> => {
+    if (store === null) return;
     try {
       setQuota(await store.getQuota());
     } catch {

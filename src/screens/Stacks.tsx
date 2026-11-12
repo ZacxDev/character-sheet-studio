@@ -1,4 +1,5 @@
-// Stacks screen: reusable checkpoint + LoRA combinations.
+// Stacks pages: reusable checkpoint + LoRA combinations, with separate
+// create/edit pages.
 //
 // A stack is picked through the HOST's native pickers (the block never browses
 // a catalog). Every pick is DISCOVERY ONLY — the server re-validates (public?
@@ -37,17 +38,30 @@ import {
 } from '../sheet/types.js';
 import {
   DEFAULT_CHECKPOINT,
+  checkpointDisplayLabel,
   pickedCheckpointLabel,
   type PickedResource,
 } from '../models.js';
 import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
 import { storeErrorMessage } from './common.js';
 
+type EditorState = { mode: 'create' } | { mode: 'edit'; id: string } | null;
+
 export interface StacksProps {
   library: SheetLibrary;
+  /** Editor selected by the current page route, when the shell is routing. */
+  initialEditor?: EditorState;
+  /** The viewer asked to open the create/edit page. */
+  onEditorOpened?: (editor: Exclude<EditorState, null>) => void;
+  /** The editor page was closed without creating a stack. */
+  onEditorClosed?: () => void;
+  /** A new stack was saved (create mode) — the return trip home. */
+  onCreated?: (stackId: string) => void;
+  /** An existing stack was saved from its edit page. */
+  onEdited?: () => void;
+  /** The create editor was closed without saving. */
+  onCreateCancelled?: () => void;
 }
-
-type EditorState = { mode: 'create' } | { mode: 'edit'; id: string } | null;
 
 function defaultCheckpoint(): StackCheckpoint {
   return {
@@ -80,13 +94,33 @@ function loraFromPick(info: BlockResourceInfo): StackLora {
     strength: clampLoraStrength(info.strength ?? 1),
     triggerWords: Array.isArray(info.trainedWords) ? info.trainedWords : [],
     name: loraLabel(info),
+    baseModel: info.baseModel,
   };
 }
 
-export function Stacks({ library }: StacksProps) {
-  const [editor, setEditor] = useState<EditorState>(null);
+export function Stacks({
+  library,
+  initialEditor,
+  onEditorOpened,
+  onEditorClosed,
+  onCreated,
+  onEdited,
+  onCreateCancelled,
+}: StacksProps) {
+  const [editor, setEditor] = useState<EditorState>(initialEditor ?? null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const openEditor = (next: Exclude<EditorState, null>) => {
+    setEditor(next);
+    onEditorOpened?.(next);
+  };
+
+  // Sheet count per stack — what a delete would orphan.
+  const sheetsByStack = new Map<string, number>();
+  for (const s of library.sheets) {
+    sheetsByStack.set(s.stackId, (sheetsByStack.get(s.stackId) ?? 0) + 1);
+  }
 
   const onDelete = async (id: string) => {
     if (confirmDeleteId !== id) {
@@ -95,38 +129,76 @@ export function Stacks({ library }: StacksProps) {
     }
     setConfirmDeleteId(null);
     setDeleteError(null);
-    // A stack in use as a character's default keeps working — the builder
-    // resolves the stack id at sheet-creation time and warns if it's gone.
+    // Existing sheets keep their stack id and images even if the stack is
+    // deleted; they render with the stack labeled unknown.
     const err = await library.deleteStack(id);
     if (err) setDeleteError(storeErrorMessage(err));
   };
 
+  // Create/edit are their own pages, so the stack list is not rendered
+  // underneath an open editor.
+  if (editor) {
+    const editing =
+      editor.mode === 'edit'
+        ? library.stacks.find((s) => s.id === editor.id)
+        : undefined;
+    if (editor.mode === 'edit' && library.ready && !editing) {
+      return (
+        <Card>
+          <Stack gap="sm">
+            <p style={{ margin: 0, opacity: 0.75 }}>
+              That stack no longer exists.
+            </p>
+            <div>
+              <Button
+                size="sm"
+                onClick={() => {
+                  setEditor(null);
+                  onEditorClosed?.();
+                }}
+              >
+                Back to stacks
+              </Button>
+            </div>
+          </Stack>
+        </Card>
+      );
+    }
+
+    return (
+      <Stack gap="md">
+        {deleteError && <Alert color="error">{deleteError}</Alert>}
+        <StackEditor
+          key={editor.mode === 'edit' ? editor.id : 'create'}
+          initial={editing}
+          onClose={() => {
+            if (editor.mode === 'create') onCreateCancelled?.();
+            setEditor(null);
+            onEditorClosed?.();
+          }}
+          onSaved={(saved) => {
+            const wasCreate = editor.mode === 'create';
+            setEditor(null);
+            if (wasCreate) onCreated?.(saved.id);
+            else onEdited?.();
+          }}
+          saveStack={library.saveStack}
+        />
+      </Stack>
+    );
+  }
+
   return (
     <Stack gap="md">
-      <Group justify="space-between" align="center">
-        <h2 style={{ margin: 0, fontSize: 20 }}>Stacks</h2>
-        <Button size="sm" onClick={() => setEditor({ mode: 'create' })}>
+      <Group justify="flex-end" align="center">
+        <Button size="sm" onClick={() => openEditor({ mode: 'create' })}>
           New stack
         </Button>
       </Group>
 
       {deleteError && <Alert color="error">{deleteError}</Alert>}
 
-      {editor && (
-        <StackEditor
-          key={editor.mode === 'edit' ? editor.id : 'create'}
-          initial={
-            editor.mode === 'edit'
-              ? library.stacks.find((s) => s.id === editor.id)
-              : undefined
-          }
-          onClose={() => setEditor(null)}
-          onSaved={() => setEditor(null)}
-          saveStack={library.saveStack}
-        />
-      )}
-
-      {library.stacks.length === 0 && !editor && (
+      {library.stacks.length === 0 && (
         <Card>
           <p style={{ margin: 0, opacity: 0.75 }}>
             No stacks yet. A stack is a checkpoint plus up to five LoRAs with
@@ -135,17 +207,16 @@ export function Stacks({ library }: StacksProps) {
         </Card>
       )}
 
-      <Stack gap="sm">
+      <div className="css-grid-cards">
         {library.stacks.map((s) => (
           <Card key={s.id}>
-            <Group justify="space-between" align="flex-start">
+            <Group justify="space-between" align="flex-start" wrap>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 600 }}>{s.name}</div>
                 <div style={{ fontSize: 13, opacity: 0.75 }}>
-                  {s.checkpoint.name ?? `Model #${s.checkpoint.modelVersionId}`} ·{' '}
-                  {s.checkpoint.baseModel}
+                  {checkpointDisplayLabel(s.checkpoint)}
                 </div>
-                <Group gap="xs" style={{ marginTop: 6 }}>
+                <Group gap="xs" wrap style={{ marginTop: 6 }}>
                   <Badge size="sm" variant="light">
                     {s.loras.length} LoRA{s.loras.length === 1 ? '' : 's'}
                   </Badge>
@@ -156,8 +227,8 @@ export function Stacks({ library }: StacksProps) {
                   ))}
                 </Group>
               </div>
-              <Group gap="xs">
-                <Button size="sm" variant="subtle" onClick={() => setEditor({ mode: 'edit', id: s.id })}>
+              <Group gap="xs" wrap>
+                <Button size="sm" variant="subtle" onClick={() => openEditor({ mode: 'edit', id: s.id })}>
                   Edit
                 </Button>
                 <Button
@@ -170,25 +241,34 @@ export function Stacks({ library }: StacksProps) {
                 </Button>
               </Group>
             </Group>
+            {confirmDeleteId === s.id && (sheetsByStack.get(s.id) ?? 0) > 0 && (
+              <p style={{ margin: '8px 0 0', fontSize: 13, opacity: 0.75 }}>
+                Deleting this stack won’t delete its {sheetsByStack.get(s.id)}{' '}
+                sheet{(sheetsByStack.get(s.id) ?? 0) === 1 ? '' : 's'} — they keep
+                their images, labeled “Unknown stack”.
+              </p>
+            )}
           </Card>
         ))}
-      </Stack>
+      </div>
     </Stack>
   );
 }
 
 // ---------------------------------------------------------------------------
 
-interface EditorProps {
+export interface StackEditorProps {
   initial?: ModelStack;
+  /** Create-mode starting values (a preset picked above the editor). */
+  preset?: { name: string; notes: string };
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved: ModelStack) => void;
   saveStack: SheetLibrary['saveStack'];
 }
 
-function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
-  const [name, setName] = useState(initial?.name ?? '');
-  const [notes, setNotes] = useState(initial?.notes ?? '');
+export function StackEditor({ initial, preset, onClose, onSaved, saveStack }: StackEditorProps) {
+  const [name, setName] = useState(initial?.name ?? preset?.name ?? '');
+  const [notes, setNotes] = useState(initial?.notes ?? preset?.notes ?? '');
   const [checkpoint, setCheckpoint] = useState<StackCheckpoint>(
     initial?.checkpoint ?? defaultCheckpoint(),
   );
@@ -197,6 +277,9 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
+  // Transient feedback for a picker round-trip that changed nothing (e.g. a
+  // duplicate LoRA pick) — a silent no-op here reads as a broken button.
+  const [loraNotice, setLoraNotice] = useState<string | null>(null);
 
   const { open: openResourcePicker } = useResourcePicker();
   const { fetch: fetchResources } = useGenerationResources();
@@ -212,7 +295,9 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
   // (older save, partial write), refresh it without reopening the pickers.
   // Strengths are NEVER touched — those are the user's.
   useEffect(() => {
-    const missing = loras.filter((l) => !l.name).map((l) => l.modelVersionId);
+    const missing = loras
+      .filter((l) => !l.name || !l.baseModel)
+      .map((l) => l.modelVersionId);
     const needCheckpoint = !checkpoint.name;
     if (missing.length === 0 && !needCheckpoint) return;
     let cancelled = false;
@@ -228,7 +313,12 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
           setLoras((cur) =>
             cur.map((l) => {
               const info = byId.get(l.modelVersionId);
-              return info && !l.name ? { ...l, name: loraLabel(info) } : l;
+              if (!info) return l;
+              return {
+                ...l,
+                ...(l.name ? {} : { name: loraLabel(info) }),
+                ...(l.baseModel ? {} : { baseModel: info.baseModel }),
+              };
             }),
           );
         }
@@ -252,6 +342,13 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
     // Run once per editor mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // LoRAs whose family doesn't match the checkpoint (possible after a
+  // checkpoint swap — the picker only constrains NEW picks). The server may
+  // silently ignore these, so warn before the user pays to find out.
+  const mismatchedLoras = loras.filter(
+    (l) => l.baseModel && l.baseModel !== checkpoint.baseModel,
+  );
 
   const nameError = touched && name.trim() === '' ? 'Give the stack a name.' : undefined;
 
@@ -277,11 +374,15 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
         baseModelGroup: checkpoint.baseModel,
       });
       if (!picked) return;
-      setLoras((cur) => {
-        if (cur.some((l) => l.modelVersionId === picked.versionId)) return cur;
-        if (cur.length >= MAX_LORAS_PER_STACK) return cur;
-        return [...cur, loraFromPick(picked)];
-      });
+      // Same version already stacked: say so instead of silently deduping.
+      if (loras.some((l) => l.modelVersionId === picked.versionId)) {
+        setLoraNotice(`“${loraLabel(picked)}” is already in this stack.`);
+        return;
+      }
+      setLoraNotice(null);
+      setLoras((cur) =>
+        cur.length >= MAX_LORAS_PER_STACK ? cur : [...cur, loraFromPick(picked)],
+      );
     } finally {
       setPickerBusy(false);
     }
@@ -314,7 +415,7 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
       setError(storeErrorMessage(err));
       return;
     }
-    onSaved();
+    onSaved(stack);
   };
 
   return (
@@ -348,9 +449,7 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
         <div>
           <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>Checkpoint</div>
           <Group gap="sm" align="center">
-            <span style={{ fontSize: 14 }}>
-              {checkpoint.name ?? `Model #${checkpoint.modelVersionId}`} ({checkpoint.baseModel})
-            </span>
+            <span style={{ fontSize: 14 }}>{checkpointDisplayLabel(checkpoint)}</span>
             <Button size="sm" variant="light" loading={pickerBusy} onClick={() => void onChangeCheckpoint()} data-testid="stack-checkpoint-change">
               Change
             </Button>
@@ -372,15 +471,35 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
               Add LoRA
             </Button>
           </Group>
+          {loraNotice && (
+            <div
+              role="status"
+              data-testid="stack-lora-notice"
+              style={{ fontSize: 13, marginBottom: 6, color: 'var(--civitai-color-text-dimmed)' }}
+            >
+              {loraNotice}
+            </div>
+          )}
+          {mismatchedLoras.length > 0 && (
+            <Alert color="warning" data-testid="stack-lora-mismatch">
+              {mismatchedLoras.length} LoRA{mismatchedLoras.length === 1 ? '' : 's'}{' '}
+              target{ mismatchedLoras.length === 1 ? 's' : ''}{' '}
+              {[...new Set(mismatchedLoras.map((l) => l.baseModel))].join(', ')} but
+              this checkpoint is {checkpoint.baseModel} — mismatched LoRAs are
+              usually ignored at generation.
+            </Alert>
+          )}
           <Stack gap="xs">
             {loras.map((l) => (
               <Card key={l.modelVersionId} padding="sm">
                 <Group justify="space-between" align="center">
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: 14, fontWeight: 500 }}>{l.name ?? `LoRA #${l.modelVersionId}`}</div>
-                    {l.triggerWords.length > 0 && (
+                    {(l.baseModel || l.triggerWords.length > 0) && (
                       <div style={{ fontSize: 12, opacity: 0.65 }}>
-                        {l.triggerWords.join(', ')}
+                        {[l.baseModel, l.triggerWords.join(', ')]
+                          .filter(Boolean)
+                          .join(' · ')}
                       </div>
                     )}
                     <Slider
@@ -399,6 +518,10 @@ function StackEditor({ initial, onClose, onSaved, saveStack }: EditorProps) {
                         )
                       }
                     />
+                    <div style={{ fontSize: 12, opacity: 0.65, marginTop: 2 }}>
+                      Typical is 0.6–1.0 — higher leans harder into the LoRA’s
+                      style, lower just hints at it.
+                    </div>
                   </div>
                   <Button
                     size="sm"

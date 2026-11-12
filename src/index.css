@@ -34,3 +34,741 @@ button:focus-visible {
   outline: 2px solid var(--civitai-color-primary);
   outline-offset: 2px;
 }
+
+/* ---------------------------------------------------------------------------
+   Character Sheet Studio theme — "Rose Noir".
+
+   Wine-dark surfaces with a rose accent: a moody, high-contrast dark-first
+   theme. Dark is the BASE (the base rule below has no data-theme qualifier,
+   so a pre-init frame paints dark, matching the boot skeleton); light exists
+   only as the explicit [data-theme='light'] override the host can request.
+   The components read --civitai-* tokens, so the theme is a token
+   REDEFINITION scoped to the app root (.css-root), not new component CSS.
+   The [data-theme] forms out-rank the pack's own [data-theme] blocks
+   (0,2,0 vs 0,1,0) so the theme wins regardless of stylesheet order.
+   ------------------------------------------------------------------------- */
+.css-root,
+.css-root[data-theme='dark'] {
+  --civitai-color-body: #120d11;
+  --civitai-color-surface: #1a1216;
+  --civitai-color-surface-2: #251a21;
+  --civitai-color-border: #362730;
+  --civitai-color-text: #f4ecf0;
+  --civitai-color-text-dimmed: #b39daa;
+  --civitai-color-primary: #e5486c;
+  --civitai-color-primary-hover: #ef6584;
+  --civitai-color-primary-fg: #2b0713;
+  --civitai-color-primary-light: rgba(229, 72, 108, 0.14);
+  --civitai-color-info: #9bb8d8;
+  --civitai-color-success: #57b87e;
+  --civitai-color-warning: #f0b429;
+  --civitai-color-error: #e5484d;
+  --civitai-color-gray-0: #faf7f9;
+  --civitai-color-gray-1: #f0e7ec;
+  --civitai-color-gray-2: #ddd0d8;
+  --civitai-color-gray-3: #c0aeb9;
+  --civitai-color-gray-4: #9c8694;
+  --civitai-color-gray-5: #7d6775;
+  --civitai-color-gray-6: #63505c;
+  --civitai-color-gray-7: #4c3d46;
+  --civitai-color-gray-8: #362730;
+  --civitai-color-gray-9: #251a21;
+  --civitai-color-segmented-bg: #251a21;
+  --civitai-color-track: #251a21;
+  --civitai-color-media-placeholder: #0b080a;
+  --civitai-radius: 0.5rem;
+  --civitai-font: 'Avenir Next', 'Segoe UI', system-ui, -apple-system, Roboto,
+    Helvetica, Arial, sans-serif;
+}
+
+.css-root[data-theme='light'] {
+  --civitai-color-body: #f7f2f4;
+  --civitai-color-surface: #ffffff;
+  --civitai-color-surface-2: #f3e9ee;
+  --civitai-color-border: #e4d3dc;
+  --civitai-color-text: #23141c;
+  --civitai-color-text-dimmed: #6f5a66;
+  --civitai-color-primary: #c2305c;
+  --civitai-color-primary-hover: #a6274f;
+  --civitai-color-primary-fg: #ffffff;
+  --civitai-color-primary-light: rgba(229, 72, 108, 0.1);
+  --civitai-color-info: #3e74a8;
+  --civitai-color-success: #2c9464;
+  --civitai-color-warning: #c07f1d;
+  --civitai-color-error: #cf4453;
+  --civitai-color-segmented-bg: #f3e9ee;
+  --civitai-color-track: #f3e9ee;
+  --civitai-color-media-placeholder: #efe6ea;
+}
+
+/* Display type: model-sheet labels — a heavy grotesque, tight and stamped.
+   Body text stays the pack's sans. All system fonts — nothing to fetch. */
+.css-root h1,
+.css-root h2,
+.css-root h3 {
+  font-weight: 800;
+  letter-spacing: -0.015em;
+}
+
+/* Generation skeleton: a shimmering surface sweep while a panel generates.
+   Colors come from the theme tokens, so it tracks light/dark automatically. */
+.css-skeleton {
+  background: linear-gradient(
+    100deg,
+    var(--civitai-color-surface-2) 40%,
+    var(--civitai-color-surface) 50%,
+    var(--civitai-color-surface-2) 60%
+  );
+  background-size: 200% 100%;
+  animation: css-shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes css-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .css-skeleton {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Layout — full-width shell + responsive grids.
+
+   The app used to be capped at 960px centered; it now fills the iframe at
+   every size, with the layout density (not a width cap) adapting across
+   mobile / tablet / laptop / desktop / ultrawide:
+   - the shell's padding grows with the viewport;
+   - card lists flow into as many columns as fit (each card keeps a sane
+     measure, so ultrawide gets MORE columns, never stretched lines);
+   - the `min(..., 100%)` minmax guard means a narrow phone always gets one
+     clean column instead of an overflowing track.
+   ------------------------------------------------------------------------- */
+
+.css-shell {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 16px 12px 28px;
+  /* The shell is the table everything sits on: the flat body token with a
+     barely-there top light, so the raised nav + content slabs (surface)
+     and the cards inside them (surface-2) read as three distinct layers
+     instead of one flat slab. */
+  background-color: var(--civitai-color-body);
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.025),
+    transparent 260px
+  );
+  color: var(--civitai-color-text);
+}
+
+.css-root.css-shell[data-theme='light'] {
+  background-image: linear-gradient(
+    180deg,
+    rgba(30, 34, 51, 0.03),
+    transparent 260px
+  );
+}
+
+/* --- App layout: side nav + raised content slab ---------------------------
+   Body (flat) → nav/content panels (surface, soft shadow) → cards
+   (surface-2). The nav docks left on wide screens and becomes a top strip
+   on phones. */
+.css-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.css-sidenav {
+  width: 188px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  background: var(--civitai-color-surface);
+  border: 1px solid var(--civitai-color-border);
+  border-radius: 14px;
+  box-shadow:
+    0 1px 2px rgba(3, 6, 16, 0.35),
+    0 16px 40px -28px rgba(3, 6, 16, 0.6);
+}
+
+.css-nav-item {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--civitai-color-text-dimmed);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.css-nav-item:hover {
+  color: var(--civitai-color-text);
+  background: var(--civitai-color-surface-2);
+}
+
+.css-nav-item[aria-current='page'] {
+  color: var(--civitai-color-primary);
+  background: var(--civitai-color-primary-light);
+}
+
+.css-nav-spacer {
+  flex: 1;
+}
+
+.css-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 20px;
+  background: var(--civitai-color-surface);
+  border: 1px solid var(--civitai-color-border);
+  border-radius: 14px;
+  box-shadow:
+    0 1px 2px rgba(3, 6, 16, 0.35),
+    0 16px 40px -28px rgba(3, 6, 16, 0.6);
+}
+
+/* Cards lift one more layer above the content slab. */
+.css-content [data-civitai-ui='card'] {
+  background: var(--civitai-color-surface-2);
+  box-shadow: 0 1px 3px rgba(3, 6, 16, 0.3);
+}
+
+/* Sheet rows on the character page get a larger carousel than list cards. */
+.css-char-thumbs-lg img {
+  width: 176px;
+  height: 176px;
+}
+
+/* Builder step links: quiet text links, not buttons — compact enough to
+   stay on one line on a phone. */
+.css-builder-steps {
+  display: flex;
+  gap: 16px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.css-builder-steps::-webkit-scrollbar {
+  display: none;
+}
+
+.css-step-link {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--civitai-color-text-dimmed);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.css-step-link:hover {
+  color: var(--civitai-color-text);
+}
+
+.css-step-link[aria-current='step'] {
+  color: var(--civitai-color-primary);
+  box-shadow: inset 0 -2px 0 var(--civitai-color-primary);
+}
+
+/* Horizontal pick strips: character + stack carousels in the Builder and
+   the stack switcher on the Sheet View. Cards are choice cards laid out as
+   a snap-scrolling row instead of a grid. */
+.css-pick-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding: 2px 2px 8px;
+  scrollbar-width: thin;
+}
+
+.css-pick-strip .css-choice-card {
+  width: auto;
+  scroll-snap-align: start;
+}
+
+.css-pick-char {
+  flex: 0 0 136px;
+}
+
+.css-pick-stack {
+  flex: 0 0 252px;
+}
+
+.css-pick-add {
+  flex: 0 0 180px;
+}
+
+.css-pick-img {
+  display: block;
+  width: 100%;
+  height: 104px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.css-pick-initial {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 104px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--civitai-color-primary) 16%, var(--civitai-color-surface-2));
+  color: var(--civitai-color-primary);
+  font-size: 40px;
+  font-weight: 700;
+}
+
+.css-pick-name {
+  margin-top: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Stack display image bleeding to the card's top edge. */
+.css-pick-stack-img {
+  display: block;
+  width: calc(100% + 24px);
+  height: 118px;
+  object-fit: cover;
+  margin: -12px -12px 10px;
+  border-radius: 11px 11px 0 0;
+}
+
+/* Initial-letter avatar tile (profile placeholder on cards/headers). */
+.css-avatar-initial {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--civitai-color-primary) 16%, var(--civitai-color-surface-2));
+  color: var(--civitai-color-primary);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* Profile picker grid in the character editor. */
+.css-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 8px;
+}
+
+.css-profile-option {
+  position: relative;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.css-profile-option img {
+  display: block;
+  width: 100%;
+  height: 84px;
+  object-fit: cover;
+}
+
+.css-profile-option[data-selected='true'] {
+  border-color: var(--civitai-color-primary);
+}
+
+/* Breadcrumb trail above sub-page content. */
+.css-crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+
+.css-crumb-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.css-crumb-sep {
+  opacity: 0.45;
+  margin: 0 4px;
+}
+
+.css-crumb {
+  color: var(--civitai-color-primary);
+  text-decoration: none;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.css-crumb:hover {
+  text-decoration: underline;
+}
+
+.css-crumb-current {
+  color: var(--civitai-color-text-dimmed);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 46vw;
+}
+
+/* The slide-out trigger bar exists only on narrow screens — on wide ones
+   the nav is a permanent rail and this stays display:none. */
+.css-topbar {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .css-layout {
+    flex-direction: column;
+    /* Zero gap: the trigger bar and the content form ONE combined card. */
+    gap: 0;
+  }
+  .css-topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    background: var(--civitai-color-surface);
+    border: 1px solid var(--civitai-color-border);
+    border-bottom: none;
+    border-radius: 14px 14px 0 0;
+  }
+  .css-topbar-title {
+    font-size: 14px;
+    font-weight: 700;
+  }
+  /* Slide-out sidebar: off-canvas until opened, then it (and its backdrop)
+     float above the content. */
+  .css-sidenav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 248px;
+    height: 100dvh;
+    z-index: 70;
+    flex-direction: column;
+    align-items: stretch;
+    overflow-y: auto;
+    border-radius: 0 14px 14px 0;
+    transform: translateX(-110%);
+    transition: transform 200ms ease;
+  }
+  .css-sidenav[data-open='true'] {
+    transform: translateX(0);
+    box-shadow: 24px 0 60px -20px rgba(0, 0, 0, 0.7);
+  }
+  .css-nav-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 65;
+    background: rgba(2, 3, 8, 0.55);
+  }
+  .css-content {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 14px;
+    /* Bottom half of the combined card whose top is the trigger bar. */
+    border-top: none;
+    border-radius: 0 0 14px 14px;
+  }
+}
+
+@media (min-width: 640px) {
+  .css-shell {
+    padding: 20px 20px 32px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .css-shell {
+    padding: 24px 28px 40px;
+  }
+}
+
+@media (min-width: 1600px) {
+  .css-shell {
+    padding: 28px 40px 48px;
+  }
+}
+
+/* Character / stack / sheet card lists. */
+.css-grid-cards {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+  align-items: start;
+}
+
+@media (min-width: 640px) {
+  .css-grid-cards {
+    gap: 16px;
+  }
+}
+
+/* The Builder's panel checklist — icon cards now (v0.1.20). */
+.css-panel-picker {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr));
+  align-items: stretch;
+}
+
+/* Selectable choice cards (stack picker, panel picker). One visual language:
+   surface-2 tile, quiet border; selected = primary ring + tint + check chip. */
+.css-choice-card {
+  position: relative;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+  background: var(--civitai-color-surface-2);
+  border: 1px solid var(--civitai-color-border);
+  border-radius: 12px;
+  padding: 12px;
+  color: var(--civitai-color-text);
+  font: inherit;
+  transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+
+.css-choice-card:hover {
+  border-color: var(--civitai-color-primary);
+}
+
+.css-choice-card[data-selected='true'] {
+  border-color: var(--civitai-color-primary);
+  box-shadow: 0 0 0 1px var(--civitai-color-primary);
+  background: color-mix(in srgb, var(--civitai-color-primary) 10%, var(--civitai-color-surface-2));
+}
+
+.css-choice-card[data-selected='true']::after {
+  content: '✓';
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--civitai-color-primary);
+  color: var(--civitai-color-primary-fg, #06242e);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.css-choice-add {
+  border-style: dashed;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  color: var(--civitai-color-text-dimmed);
+  min-height: 92px;
+}
+
+.css-choice-add:hover {
+  color: var(--civitai-color-primary);
+}
+
+/* Stack picker: roomier cards than the panel grid. */
+.css-stack-picker {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(min(250px, 100%), 1fr));
+  align-items: stretch;
+}
+
+/* Panel-kind icons sit in a soft tile at the top of each panel card. */
+.css-panel-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--civitai-color-primary) 12%, transparent);
+  color: var(--civitai-color-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+/* Sheet View's generated-panel grid (was an inline style). */
+.css-panel-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr));
+  align-items: start;
+}
+
+/* Character cards are click targets (open the character's page) — signal it
+   and lift on hover. Nothing may spill past the card edge: long names,
+   unbroken words, and the thumbnail carousel all clip or scroll INSIDE. */
+.css-char-card {
+  cursor: pointer;
+  overflow: hidden;
+  transition: box-shadow 120ms ease, transform 120ms ease;
+}
+
+.css-char-card:hover {
+  box-shadow: 0 4px 14px rgba(3, 6, 16, 0.4);
+}
+
+.css-char-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.css-char-desc {
+  opacity: 0.75;
+  font-size: 13px;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* Generated-panel thumbnails: a fixed-size carousel strip. Every thumb is
+   the same 132px square whether the character has one generation or eight
+   — the row scrolls sideways instead of shrinking the images to fit. */
+.css-char-thumbs {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+
+.css-char-thumbs::-webkit-scrollbar {
+  display: none;
+}
+
+.css-char-thumbs img {
+  flex: 0 0 auto;
+  width: 132px;
+  height: 132px;
+  object-fit: cover;
+  border-radius: 10px;
+  display: block;
+  scroll-snap-align: start;
+}
+
+/* Hand-rolled overlays (the pack ships no Menu/Popover): the character
+   card's 3-dot menu and the seed-policy popover. */
+.css-overlay-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.css-icon-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--civitai-color-border);
+  background: var(--civitai-color-surface);
+  color: var(--civitai-color-text-dimmed);
+  cursor: pointer;
+}
+
+.css-icon-btn:hover {
+  color: var(--civitai-color-text);
+}
+
+.css-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 148px;
+  padding: 4px;
+  background: var(--civitai-color-surface);
+  border: 1px solid var(--civitai-color-border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(3, 6, 16, 0.5);
+}
+
+.css-menu-item {
+  appearance: none;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  background: transparent;
+  color: var(--civitai-color-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.css-menu-item:hover {
+  background: var(--civitai-color-surface-2);
+}
+
+.css-menu-item[data-danger='true'] {
+  color: var(--civitai-color-error);
+}
+
+.css-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  width: 240px;
+  padding: 10px 12px;
+  background: var(--civitai-color-surface);
+  border: 1px solid var(--civitai-color-border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(3, 6, 16, 0.5);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--civitai-color-text);
+  cursor: default;
+}
+

@@ -22,28 +22,36 @@ const panel = (over: Partial<SheetPanel> = {}): SheetPanel => ({
 });
 
 describe('idempotencyKeyFor', () => {
-  it('builds a stable sheetId-panelId-nonce key', () => {
-    expect(idempotencyKeyFor('sheet_abc', 'panel_1')).toBe('sheet_abc-panel_1-0');
-    expect(idempotencyKeyFor('sheet_abc', 'panel_1', 2)).toBe('sheet_abc-panel_1-2');
-    // Stable across calls — retry-safe.
+  it('is stable across calls (retry-safe) and differs per sheet, panel, nonce', () => {
     expect(idempotencyKeyFor('sheet_abc', 'panel_1')).toBe(
       idempotencyKeyFor('sheet_abc', 'panel_1'),
     );
-  });
-  it('differs per panel and per nonce', () => {
+    expect(idempotencyKeyFor('sheet_abc', 'panel_1', 2)).toBe(
+      idempotencyKeyFor('sheet_abc', 'panel_1', 2),
+    );
     expect(idempotencyKeyFor('s', 'p1')).not.toBe(idempotencyKeyFor('s', 'p2'));
+    expect(idempotencyKeyFor('s', 'p1')).not.toBe(idempotencyKeyFor('s2', 'p1'));
     expect(idempotencyKeyFor('s', 'p1', 0)).not.toBe(idempotencyKeyFor('s', 'p1', 1));
   });
-  it('satisfies the live host idempotencyKey pattern (the mock host never checks)', () => {
+
+  it('satisfies the live host pattern for REAL ids (UUIDs — the naive join is 75 chars)', () => {
     // The production host 400s `blocks.submitWorkflow` when the key doesn't
-    // match /^[A-Za-z0-9_-]{1,64}$/ — colons were the live bug.
-    const ids: Array<[string, string, number]> = [
-      ['sheet_abc', 'panel_1', 0],
-      ['r' + 'm'.repeat(20), 'p-front', 12],
-    ];
-    for (const [s, p, n] of ids) {
-      expect(idempotencyKeyFor(s, p, n)).toMatch(IDEMPOTENCY_KEY_PATTERN);
+    // match /^[A-Za-z0-9_-]{1,64}$/. Sheet/panel ids are crypto.randomUUID()
+    // (36 chars each), so any literal join breaks the 64-char cap — the key
+    // must be a bounded hash. (The earlier test used short fake ids and let
+    // exactly this bug ship.)
+    const sheetId = '550e8400-e29b-41d4-a716-446655440000';
+    const panelId = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+    expect(`${sheetId}-${panelId}-0`).not.toMatch(IDEMPOTENCY_KEY_PATTERN);
+    for (const nonce of [0, 1, 12]) {
+      const key = idempotencyKeyFor(sheetId, panelId, nonce);
+      expect(key).toMatch(IDEMPOTENCY_KEY_PATTERN);
+      expect(key.length).toBeLessThanOrEqual(64);
     }
+    // Distinct UUIDs → distinct keys (no accidental cross-panel collapse).
+    expect(idempotencyKeyFor(sheetId, panelId)).not.toBe(
+      idempotencyKeyFor(sheetId, '00000000-0000-4000-8000-000000000000'),
+    );
   });
 });
 

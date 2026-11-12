@@ -141,6 +141,24 @@ export function pickedCheckpointLabel(
   return resourceDisplayName(names) ?? `Model #${versionId} (${baseModel})`;
 }
 
+const squashWs = (s: string) => s.toLowerCase().replace(/\s+/g, '');
+
+/**
+ * Display label for a saved checkpoint: its name (or `Model #id` fallback)
+ * with the base-model family appended ONLY when the name doesn't already
+ * carry it — a picked name like "SD XL 1.0" for base model "SDXL 1.0" must
+ * not render as "SD XL 1.0 (SDXL 1.0)".
+ */
+export function checkpointDisplayLabel(checkpoint: {
+  name?: string;
+  modelVersionId: number;
+  baseModel: string;
+}): string {
+  const base = checkpoint.name ?? `Model #${checkpoint.modelVersionId}`;
+  if (squashWs(base).includes(squashWs(checkpoint.baseModel))) return base;
+  return `${base} (${checkpoint.baseModel})`;
+}
+
 /** Turn a picked resource (`BlockCheckpointInfo`) into a `CheckpointOption`. */
 export function checkpointFromPick(picked: PickedResource): CheckpointOption {
   return {

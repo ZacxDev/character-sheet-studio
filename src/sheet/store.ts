@@ -1,27 +1,24 @@
 /**
- * Character Sheet Studio — durable store on top of `useAppStorage`.
+ * Character Sheet Studio — durable store on top of the document store's
+ * private `kv` collection (`./kv-store.ts`).
  *
- * `SheetStore` wraps the host-mediated KV store with the app's key scheme,
- * normalizers (malformed rows are dropped, never thrown), cursor-paginated
- * listing, and error classification. Storage failures are surfaced as
- * `StoreErrorKind` — the app renders its own copy, never the host's prose.
+ * `SheetStore` wraps the KV façade with the app's key scheme, normalizers
+ * (malformed rows are dropped, never thrown), cursor-paginated listing, and
+ * error classification. Storage failures are surfaced as `StoreErrorKind` —
+ * the app renders its own copy, never the server's prose.
  *
- * Two scoping facts from the platform, encoded here as comments where they
- * bite:
- * - Keys are namespaced per (block instance, viewer); the byte/row budgets
- *   are enforced per (app, viewer). Every instance of this app shares one
- *   budget for the viewer.
- * - Anonymous viewers read `null` / empty lists and hard-reject writes. The
- *   store does not gate on that — the UI layer decides (see
+ * Scoping facts from the platform, encoded here as comments where they bite:
+ * - A private collection is one key space per (app, viewer): every placement
+ *   of this app shares the viewer's ONE library and ONE budget
+ *   (`info().limits.viewerBytes` / `viewerDocs`).
+ * - An anonymous viewer is REFUSED (`sign_in_required`) on every private read
+ *   and write. The store does not gate on that — the UI layer does (see
  *   `useSheetLibrary`), because only it knows the viewer's state.
  */
 
-import {
-  classifyAppStorageError,
-  type AppStorageRejectionReason,
-} from '@civitai/app-sdk/blocks';
-import type { AppStorageQuota, UseAppStorage } from '@civitai/blocks-react';
+import { StorageError } from '@civitai/sdk';
 
+import type { KvQuota, KvStorage } from './kv-store.js';
 import {
   CHARACTER_PREFIX,
   SETTINGS_KEY,
@@ -50,53 +47,50 @@ export type StoreErrorKind =
   | 'unknown';
 
 /**
- * The host's scope-denied message for app storage, e.g.
- * `storage set requires the apps:storage:write scope`. The SDK's classifier
- * deliberately leaves authorization failures unrecognized (the set is
- * open-ended), but THIS one has a fixed template and a known meaning: the
- * block's manifest does not declare the storage scope. Retrying cannot fix
- * it, so it gets its own kind instead of landing in 'unknown'.
+ * Map a document-store refusal onto the app's closed set. Branches on the
+ * envelope's `code` only (never on prose). Anything unrecognized — including
+ * `sign_in_required` for an anonymous viewer — lands in 'unknown', so the UI
+ * never assumes "transient, retry".
+ *
+ * `row-limit` is no longer produced: the store answers both per-viewer
+ * ceilings (bytes and documents) with one `quota_exceeded`. The kind stays in
+ * the union because the UI copy table is keyed on it.
  */
-const STORAGE_SCOPE_DENIED =
-  /storage (get|set|delete|list) requires the apps:storage:(read|write) scope/;
-
-function errorMessage(error: unknown): string {
-  if (typeof error === 'string') return error;
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'object' && error !== null && 'message' in error) {
-    const m = (error as { message?: unknown }).message;
-    return typeof m === 'string' ? m : '';
+export function classifyStoreError(error: unknown): StoreErrorKind {
+  if (error instanceof StorageError) {
+    switch (error.code) {
+      case 'too_large':
+        return 'value-too-large';
+      case 'quota_exceeded':
+        return 'quota-exceeded';
+      // The manifest does not declare the collection/scope, the approved
+      // version does not have it yet, or the viewer revoked consent — a retry
+      // cannot fix any of these.
+      case 'insufficient_scope':
+      case 'consent_required':
+      case 'collection_not_declared':
+      case 'not_eligible':
+        return 'not-permitted';
+      case 'rate_limited':
+      case 'service_unavailable':
+      case 'consent_unavailable':
+      case 'internal_error':
+        return 'request-failed';
+      default:
+        return 'unknown';
+    }
   }
-  return '';
+  // `fetch` itself rejected (offline, connection dropped): no answer at all.
+  if (error instanceof TypeError) return 'request-failed';
+  return 'unknown';
 }
 
 /**
- * Map the SDK's rejection classification onto the app's closed set.
- * `null` (unrecognized, incl. anonymous-write rejections and expired tokens)
- * lands in 'unknown' — the UI must not assume "transient, retry".
+ * Document-store key cap (`^[A-Za-z0-9._:-]{1,128}$`). Our keys are
+ * constructed (a fixed prefix + a uuid), so this is a dev guard, not input
+ * validation.
  */
-export function classifyStoreError(error: unknown): StoreErrorKind {
-  if (STORAGE_SCOPE_DENIED.test(errorMessage(error))) return 'not-permitted';
-  const reason: AppStorageRejectionReason | null =
-    classifyAppStorageError(error);
-  switch (reason) {
-    case 'value-too-large':
-      return 'value-too-large';
-    case 'user-quota-exceeded':
-    case 'app-quota-exceeded':
-      return 'quota-exceeded';
-    case 'user-row-limit':
-    case 'app-row-limit':
-      return 'row-limit';
-    case 'request-failed':
-      return 'request-failed';
-    default:
-      return 'unknown';
-  }
-}
-
-/** Host cap on key length — our keys are constructed, this is a dev guard. */
-const MAX_KEY_LENGTH = 200;
+const MAX_KEY_LENGTH = 128;
 
 function assertKeyLength(key: string): void {
   if (key.length > MAX_KEY_LENGTH) {
@@ -107,7 +101,7 @@ function assertKeyLength(key: string): void {
 }
 
 export class SheetStore {
-  constructor(private readonly storage: UseAppStorage) {}
+  constructor(private readonly storage: KvStorage) {}
 
   // --- characters ----------------------------------------------------------
 
@@ -200,10 +194,10 @@ export class SheetStore {
   }
 
   /**
-   * Render BOTH numbers from the reply — rows are usually the binding
+   * Render BOTH numbers from the reply — documents are usually the binding
    * ceiling, so a bytes-only "x of y used" readout misleads.
    */
-  async getQuota(): Promise<AppStorageQuota> {
+  async getQuota(): Promise<KvQuota> {
     return this.storage.getQuota();
   }
 
@@ -216,12 +210,12 @@ export class SheetStore {
     const out: T[] = [];
     let cursor: string | undefined;
     do {
+      // A document-store page carries whole documents, so there is no per-key
+      // `get` fan-out (the legacy list returned keys only). That also keeps a
+      // large library inside the store's per-viewer READ rate limit.
       const page = await this.storage.list({ prefix, cursor, limit: 100 });
-      const values = await Promise.all(
-        page.keys.map((entry) => this.storage.get(entry.key)),
-      );
-      for (const value of values) {
-        const item = normalize(value);
+      for (const entry of page.entries) {
+        const item = normalize(entry.value);
         if (item !== null) out.push(item);
       }
       cursor = page.nextCursor;
