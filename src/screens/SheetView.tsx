@@ -35,9 +35,10 @@ import type { BlockWorkflowSnapshot } from '@civitai/app-sdk/blocks';
 
 import {
   BUDGETED_SCOPE,
+  classifyEstimateRejection,
   classifyPricedFailure,
   classifySubmitRejection,
-  estimateErrorCopy,
+  estimateFailureCopy,
   formatCost,
   hasBudgetedScope,
   isTerminalStatus,
@@ -415,13 +416,14 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
         }
         setPanelConfirm({ panelId, mode, cost, next });
       } catch (err) {
-        const code = (err as { code?: unknown } | null)?.code;
         await setPanel(panelId, (p) => ({
           ...p,
           status: 'failed',
           errorCode: 'estimate-failed',
         }));
-        setError(`Couldn’t price this panel. ${estimateErrorCopy(code)}`);
+        // App-owned copy from the classified server reason (never the raw text).
+        const copy = estimateFailureCopy(classifyEstimateRejection(err), stack.name);
+        setError(`${copy.title}. ${copy.body}`);
       } finally {
         setBusyPanel(null);
       }
@@ -452,6 +454,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
     setPanelConfirm(null);
     const items: { panelId: string; next: SheetPanel; cost: number }[] = [];
     let total = 0;
+    let firstRejection: unknown = undefined;
     try {
       for (const panel of queued) {
         // Same prepared-state rule as a single retry: the submitted body is
@@ -477,7 +480,8 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
           }
           items.push({ panelId: panel.id, next, cost });
           total += cost;
-        } catch {
+        } catch (err) {
+          if (firstRejection === undefined) firstRejection = err ?? null;
           await failPanel(panel.id, 'estimate-failed');
         }
       }
@@ -485,7 +489,12 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       setBatchBusy(false);
     }
     if (items.length === 0) {
-      setError('Couldn’t price the queued panels — each one shows its own error on its card.');
+      if (firstRejection !== undefined) {
+        const copy = estimateFailureCopy(classifyEstimateRejection(firstRejection), stack.name);
+        setError(`Couldn’t price the queued panels. ${copy.title}: ${copy.body}`);
+      } else {
+        setError('Couldn’t price the queued panels — each one shows its own error on its card.');
+      }
       return;
     }
     setBatchConfirm({ items, total });

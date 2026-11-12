@@ -7,9 +7,12 @@ import {
   accountLabel,
   buildWorkflowBody,
   clampPrompt,
+  classifyEstimateFailure,
+  classifyEstimateRejection,
   classifyPricedFailure,
   classifySubmitRejection,
   estimateErrorCopy,
+  estimateFailureCopy,
   firstImageUrl,
   formatCost,
   hasBudgetedScope,
@@ -539,5 +542,41 @@ describe('submitRejectionCopy', () => {
   });
   it('unknown: plain failure with retry language', () => {
     expect(submitRejectionCopy('unknown').body).toMatch(/try again/i);
+  });
+});
+
+// Feedback #189: a rejected estimate used to collapse every server reason into
+// "Pricing failed just now". The classifier reads err.snapshot.error (never
+// rendered) and must route each literal server message to an actionable kind.
+describe('classifyEstimateRejection', () => {
+  const rej = (code: string, error?: string) => ({ code, snapshot: { status: 'failed', error } });
+  it.each([
+    ['a selected LoRA is not compatible with the checkpoint base model', 'lora-incompatible'],
+    ['additional resources must be LoRA models', 'lora-incompatible'],
+    ['a selected resource is not available to apps', 'resource-unavailable'],
+    ['a selected resource is not available for generation', 'resource-unavailable'],
+    ['Validation failed: ecosystem: Ecosystem is currently unavailable', 'ecosystem-unavailable'],
+    ['estimate requires authenticated viewer', 'needs-sign-in'],
+    // Contains "budgeted": must NOT be read as a wallet problem.
+    ['block lacks ai:write:budgeted scope', 'needs-approval'],
+    ['Insufficient buzz balance', 'unaffordable'],
+    ['Rate limit exceeded, please retry shortly.', 'limited'],
+    ['some unexpected server text', 'failed'],
+  ])('%s -> %s', (message, kind) => {
+    expect(classifyEstimateRejection(rej('failed', message))).toBe(kind);
+  });
+  it('falls back on code when there is no server reason', () => {
+    expect(classifyEstimateRejection(rej('no-cost'))).toBe('no-cost');
+    expect(classifyEstimateRejection(rej('failed'))).toBe('failed');
+    expect(classifyEstimateRejection(new Error('request timed out'))).toBe('unreachable');
+    expect(classifyEstimateRejection(null)).toBe('unreachable');
+    expect(classifyEstimateFailure(undefined, '')).toBe('unreachable');
+  });
+  it('copy names the stack and never echoes server text', () => {
+    const c = estimateFailureCopy('lora-incompatible', 'Qx Stack');
+    expect(c.body).toContain('“Qx Stack”');
+    expect(c.body).not.toMatch(/not compatible with the checkpoint base model/);
+    expect(estimateFailureCopy('unaffordable', 'Qx Stack').showTopUp).toBe(true);
+    expect(estimateFailureCopy('limited', 'Qx Stack').showTopUp).toBe(false);
   });
 });

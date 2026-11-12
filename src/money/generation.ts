@@ -498,6 +498,149 @@ export function estimateErrorCopy(code: unknown): string {
 }
 
 /**
+ * Why an `estimate()` came back unusable, in terms the viewer can ACT on.
+ *
+ * Before 0.2.1 a rejected estimate was mapped on `code` alone, so every
+ * server reason — an incompatible LoRA, a resource apps may not use, an
+ * unavailable ecosystem, an empty wallet — collapsed into "Pricing failed just
+ * now. Please try again." and the Builder showed only a failure COUNT
+ * (feedback #189: "can't get past pricing and can't see if i did something
+ * wrong"). The reason was on `err.snapshot.error` the whole time.
+ *
+ * `snapshot.error` is server-authored and UNSANITISED, so it is only ever
+ * CLASSIFIED here — never rendered. The phrases matched are the literal
+ * messages `blocks.estimateWorkflow` throws (LoRA family-match, page resource
+ * gate, scope / viewer checks) plus the orchestrator's ecosystem validation.
+ * Order matters: the scope message contains "budgeted", which the wallet
+ * heuristic would read as affordability, and "Ecosystem is currently
+ * unavailable" would otherwise land in the platform-limit bucket.
+ */
+export type EstimateFailureKind =
+  | 'lora-incompatible'
+  | 'resource-unavailable'
+  | 'ecosystem-unavailable'
+  | 'needs-sign-in'
+  | 'needs-approval'
+  | 'unaffordable'
+  | 'limited'
+  | 'no-cost'
+  | 'failed'
+  | 'unreachable';
+
+/** Duck-typed so it stays unit-testable in node (no SDK error class import). */
+export function classifyEstimateRejection(err: unknown): EstimateFailureKind {
+  const code = (err as { code?: unknown } | null | undefined)?.code;
+  const raw = (err as { snapshot?: { error?: unknown } } | null | undefined)?.snapshot?.error;
+  return classifyEstimateFailure(code, typeof raw === 'string' ? raw : null);
+}
+
+/**
+ * The same classification for both producers: a REJECTED estimate
+ * (`code` from `WorkflowEstimateError`) and a RESOLVED snapshot that still
+ * carries no usable price (pass `code: 'failed'` / `'no-cost'` yourself).
+ */
+export function classifyEstimateFailure(
+  code: unknown,
+  message: string | null | undefined,
+): EstimateFailureKind {
+  const m = (message ?? '').toLowerCase();
+  if (m) {
+    if (m.includes('lora') && (m.includes('compatible') || m.includes('must be lora'))) {
+      return 'lora-incompatible';
+    }
+    if (m.includes('ecosystem')) return 'ecosystem-unavailable';
+    if (m.includes('resource') && m.includes('not available')) return 'resource-unavailable';
+    if (m.includes('authenticated viewer')) return 'needs-sign-in';
+    if (m.includes('ai:write:budgeted') || (m.includes('scope') && m.includes('lacks'))) {
+      return 'needs-approval';
+    }
+    const priced = classifyPricedFailure(message);
+    if (priced === 'affordability') return 'unaffordable';
+    if (priced === 'nonWallet') return 'limited';
+  }
+  if (code === 'no-cost') return 'no-cost';
+  if (code === 'failed') return 'failed';
+  return 'unreachable';
+}
+
+export interface EstimateFailureCopy {
+  title: string;
+  body: string;
+  /** Whether offering the Buzz top-up modal is honest for this failure. */
+  showTopUp: boolean;
+}
+
+/** App-owned viewer copy for an {@link EstimateFailureKind}. */
+export function estimateFailureCopy(
+  kind: EstimateFailureKind,
+  stackName: string,
+): EstimateFailureCopy {
+  const stack = `“${stackName}”`;
+  switch (kind) {
+    case 'lora-incompatible':
+      return {
+        title: 'LoRA doesn’t fit this checkpoint',
+        body: `A LoRA in ${stack} doesn’t match its checkpoint’s base model. Edit the stack to remove that LoRA or pick a matching checkpoint, then price again.`,
+        showTopUp: false,
+      };
+    case 'resource-unavailable':
+      return {
+        title: 'Model can’t be used here',
+        body: `A model or LoRA in ${stack} can’t be used for generation in apps (it may be private, early access or restricted). Swap it out of the stack, then price again.`,
+        showTopUp: false,
+      };
+    case 'ecosystem-unavailable':
+      return {
+        title: 'Checkpoint family unavailable',
+        body: `The checkpoint family in ${stack} isn’t available for generation right now. Pick a stack with a different checkpoint, or price again later.`,
+        showTopUp: false,
+      };
+    case 'needs-sign-in':
+      return {
+        title: 'Sign in again',
+        body: 'Civitai didn’t recognise your session for pricing. Sign in again, then price.',
+        showTopUp: false,
+      };
+    case 'needs-approval':
+      return {
+        title: 'Spending approval needed',
+        body: 'Civitai needs your spending approval before it can price. Press Price to open the approval dialog again.',
+        showTopUp: false,
+      };
+    case 'unaffordable':
+      return {
+        title: 'Not enough Buzz',
+        body: 'This panel costs more than your available Buzz. Top up, then price again.',
+        showTopUp: true,
+      };
+    case 'limited':
+      return {
+        title: 'Pricing is limited right now',
+        body: 'A platform or app limit is blocking pricing — not your setup or balance. Buying Buzz won’t fix it; price again in a few minutes.',
+        showTopUp: false,
+      };
+    case 'no-cost':
+      return {
+        title: 'No price returned',
+        body: `Civitai didn’t return a price for this setup, so nothing can be submitted. Try a different stack than ${stack}, or price again in a moment.`,
+        showTopUp: false,
+      };
+    case 'failed':
+      return {
+        title: 'Couldn’t price this panel',
+        body: `Civitai rejected the price request for this setup. Check the checkpoint and LoRAs in ${stack} (or try another stack), then price again — nothing was submitted.`,
+        showTopUp: false,
+      };
+    case 'unreachable':
+      return {
+        title: 'Pricing didn’t respond',
+        body: 'Civitai didn’t answer the price request. Check your connection and price again — nothing was submitted.',
+        showTopUp: false,
+      };
+  }
+}
+
+/**
  * Classify a rejected `submit()` WITHOUT importing the SDK error class (kept
  * duck-typed so this stays unit-testable in node): read `.code`, and for
  * `'workflow-failed'` read `.snapshot.workflowId` to decide pollability.

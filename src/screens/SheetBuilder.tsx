@@ -55,9 +55,11 @@ import {
   ACCOUNT_CHOICES,
   BUDGETED_SCOPE,
   accountLabel,
+  classifyEstimateFailure,
+  classifyEstimateRejection,
   classifyPricedFailure,
   classifySubmitRejection,
-  estimateErrorCopy,
+  estimateFailureCopy,
   formatCost,
   hasBudgetedScope,
   isTerminalStatus,
@@ -74,10 +76,8 @@ import { composePanelPrompt } from '../sheet/prompt.js';
 import { startPollLoop } from '../money/pollLoop.js';
 import {
   idempotencyKeyFor,
-  panelErrorCopy,
   pricedKindToErrorCode,
   resolvePanelSeed,
-  type PanelErrorCode,
 } from '../sheet/batch.js';
 import type { ModelStack, PanelKind, PanelSpec, SheetJob, SheetPanel } from '../sheet/types.js';
 import { PANEL_KINDS, PANEL_LABELS, defaultPanelSpecs, newSheetJob } from '../sheet/types.js';
@@ -114,6 +114,8 @@ interface PanelEstimate {
   cost?: number;
   errorTitle?: string;
   errorBody?: string;
+  /** The failure is the wallet — offering the top-up modal is honest. */
+  showTopUp?: boolean;
 }
 
 /** A panel the viewer wrote inline (any base kind, own label + wording). */
@@ -474,20 +476,35 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
         const snap: BlockWorkflowSnapshot = await estimate(body);
         const cost = snap.cost?.total;
         if (snap.status === 'failed' || snap.error || typeof cost !== 'number') {
-          const code: PanelErrorCode = pricedKindToErrorCode(
-            classifyPricedFailure(snap.error),
+          const copy = estimateFailureCopy(
+            classifyEstimateFailure(
+              typeof cost === 'number' ? 'failed' : 'no-cost',
+              snap.error,
+            ),
+            s.name,
           );
-          const copy = panelErrorCopy(code);
-          results[panel.id] = { errorTitle: copy.title, errorBody: copy.body };
+          results[panel.id] = {
+            errorTitle: copy.title,
+            errorBody: copy.body,
+            showTopUp: copy.showTopUp,
+          };
           failures += 1;
         } else {
           results[panel.id] = { cost };
         }
       } catch (err) {
-        const code = (err as { code?: unknown } | null)?.code;
+        // The reason lives on err.snapshot.error (server-authored, unsanitised):
+        // classify it into app-owned copy, never render it. The raw text goes
+        // to the console only, for whoever is debugging the app.
+        console.warn('[character-sheet-studio] estimate rejected', {
+          code: (err as { code?: unknown } | null)?.code,
+          error: (err as { snapshot?: { error?: unknown } } | null)?.snapshot?.error,
+        });
+        const copy = estimateFailureCopy(classifyEstimateRejection(err), s.name);
         results[panel.id] = {
-          errorTitle: 'Couldn’t price this panel',
-          errorBody: estimateErrorCopy(code),
+          errorTitle: copy.title,
+          errorBody: copy.body,
+          showTopUp: copy.showTopUp,
         };
         failures += 1;
       }
@@ -496,8 +513,8 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
 
     if (failures > 0) {
       setError(
-        `${failures} panel${failures === 1 ? '' : 's'} couldn’t be priced. ` +
-          'The batch is blocked until every panel has a price — adjust the setup and price again.',
+        `${failures} of ${job.panels.length} panel${job.panels.length === 1 ? '' : 's'} couldn’t be priced, ` +
+          'so the batch can’t run yet. The reason is shown next to Price below.',
       );
       setPhase('idle');
       return;
@@ -646,9 +663,12 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
       return;
     }
     if (!granted) {
-      // Never overwrite a waiting intent — resuming as 'submit' would skip
-      // the price preview.
-      requestConsentFor(consentIntentRef.current ?? 'estimate');
+      // Always resume as a RE-PRICE from this button, even if a Generate was
+      // waiting on approval: the viewer then sees (and confirms) the price
+      // again before anything is spent. This is also the way out of a
+      // dismissed dialog — the host sends nothing back when the viewer closes
+      // it, so this button must stay pressable while we wait (feedback #189).
+      requestConsentFor('estimate');
       return;
     }
     void runEstimateRef.current();
@@ -1032,13 +1052,46 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
 
   const panelCount = allSpecs.length + customPanels.length;
 
+  // Why Continue is disabled — a disabled button with no reason is a dead end.
+  const stepBlockedReason =
+    step === 0 && !characterId
+      ? 'Pick a character to continue.'
+      : step === 0 && !stackId
+        ? 'Pick or create a stack to continue.'
+        : step === 1 && chosenSpecs.length === 0
+          ? 'Select at least one panel to continue.'
+          : null;
+
+  // The last pricing run's failures, grouped by reason (every panel of one
+  // sheet shares a stack, so they usually fail for the same reason). Shown
+  // only while the viewer is back at the Price button — the confirm card is
+  // never reached with a failure.
+  const priceFailures: Array<{ title: string; body: string; showTopUp: boolean; labels: string[] }> = [];
+  if (phase === 'idle' && draft) {
+    for (const p of draft.panels) {
+      const e = estimates[p.id];
+      if (!e || e.cost != null || !e.errorTitle) continue;
+      const body = e.errorBody ?? '';
+      const hit = priceFailures.find((f) => f.title === e.errorTitle && f.body === body);
+      if (hit) hit.labels.push(p.label);
+      else
+        priceFailures.push({
+          title: e.errorTitle,
+          body,
+          showTopUp: !!e.showTopUp,
+          labels: [p.label],
+        });
+    }
+  }
+
   return (
     <Stack gap="md">
       {error && <Alert color="error">{error}</Alert>}
 
       {phase === 'needs-consent' && (
-        <Alert color="info">
+        <Alert color="info" data-testid="se-builder-consent-wait">
           <Loader size="sm" /> Waiting for your approval in the Civitai dialog…
+          If you closed it, press Price again to reopen it.
         </Alert>
       )}
       {phase === 'consent-unavailable' && (
@@ -1581,7 +1634,9 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
               <Button
                 onClick={startPricing}
                 loading={phase === 'estimating'}
-                disabled={busy || chosenSpecs.length === 0}
+                // NOT `busy`: while waiting on the approval dialog this is the
+                // only way to reopen it (a dismissed dialog sends no reply).
+                disabled={phase === 'estimating' || phase === 'submitting' || chosenSpecs.length === 0}
                 data-testid="se-builder-price"
               >
                 {anon
@@ -1591,11 +1646,39 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
                     : `Price ${chosenSpecs.length} panel${chosenSpecs.length === 1 ? '' : 's'}`}
               </Button>
             </Group>
+            {priceFailures.length > 0 && (
+              <Alert color="warning" data-testid="se-builder-price-failures">
+                <Stack gap="xs">
+                  {priceFailures.map((f) => (
+                    <div key={f.title + f.body} style={{ fontSize: 14 }}>
+                      <strong>{f.title}</strong>
+                      {f.labels.length < (draft?.panels.length ?? 0)
+                        ? ` (${f.labels.join(', ')})`
+                        : ''}
+                      {' — '}
+                      {f.body}
+                    </div>
+                  ))}
+                  {priceFailures.some((f) => f.showTopUp) && (
+                    <div>
+                      <Button size="sm" variant="light" onClick={() => void openPurchaseModal()}>
+                        Top up Buzz
+                      </Button>
+                    </div>
+                  )}
+                </Stack>
+              </Alert>
+            )}
               </>
             )}
 
             {step < 2 && (
               <Group justify="flex-end" align="center">
+                {!busy && stepBlockedReason && (
+                  <span style={{ fontSize: 13, opacity: 0.75 }} data-testid="builder-step-hint">
+                    {stepBlockedReason}
+                  </span>
+                )}
                 <Button
                   disabled={
                     busy ||
