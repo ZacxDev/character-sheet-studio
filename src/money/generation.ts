@@ -483,21 +483,6 @@ export function classifyPricedFailure(
 }
 
 /**
- * App-owned copy for a rejected `estimate()`, keyed on
- * `WorkflowEstimateError.code` — the only stable branch target on that
- * boundary. Unknown / non-estimate errors get the generic arm.
- */
-export function estimateErrorCopy(code: unknown): string {
-  if (code === 'no-cost') {
-    return 'We couldn’t get a price for this character sheet. Try a different character or stack.';
-  }
-  if (code === 'failed') {
-    return 'Pricing failed just now. Please try again.';
-  }
-  return 'Pricing is unavailable right now. Please try again shortly.';
-}
-
-/**
  * Why an `estimate()` came back unusable, in terms the viewer can ACT on.
  *
  * Before 0.2.1 a rejected estimate was mapped on `code` alone, so every
@@ -603,8 +588,12 @@ export function estimateFailureCopy(
       };
     case 'needs-approval':
       return {
-        title: 'Spending approval needed',
-        body: 'Civitai needs your spending approval before it can price. Press Price to open the approval dialog again.',
+        title: 'Spending approval not accepted',
+        // Reachable only when this app's token SAYS the scope is granted and
+        // the server disagrees (stale/revoked approval). Re-requesting consent
+        // for a scope the token already holds is silent on the host, so the
+        // honest way out is a reload, which mints a fresh token.
+        body: 'Civitai didn’t accept your spending approval for pricing. Reload the app and approve spending when asked, then price again.',
         showTopUp: false,
       };
     case 'unaffordable':

@@ -11,7 +11,6 @@ import {
   classifyEstimateRejection,
   classifyPricedFailure,
   classifySubmitRejection,
-  estimateErrorCopy,
   estimateFailureCopy,
   firstImageUrl,
   formatCost,
@@ -485,15 +484,6 @@ describe('pricedFailureCopy', () => {
   });
 });
 
-describe('estimateErrorCopy', () => {
-  it('keys copy on the stable code, with a generic arm for unknown codes', () => {
-    expect(estimateErrorCopy('no-cost')).toMatch(/couldn’t get a price/i);
-    expect(estimateErrorCopy('failed')).toMatch(/pricing failed/i);
-    expect(estimateErrorCopy(undefined)).toMatch(/unavailable right now/i);
-    expect(estimateErrorCopy('something-new')).toMatch(/unavailable right now/i);
-  });
-});
-
 describe('classifySubmitRejection', () => {
   const snap = (over: Partial<BlockWorkflowSnapshot> = {}): BlockWorkflowSnapshot => ({
     workflowId: 'failed',
@@ -578,5 +568,9 @@ describe('classifyEstimateRejection', () => {
     expect(c.body).not.toMatch(/not compatible with the checkpoint base model/);
     expect(estimateFailureCopy('unaffordable', 'Qx Stack').showTopUp).toBe(true);
     expect(estimateFailureCopy('limited', 'Qx Stack').showTopUp).toBe(false);
+    // A stale approval cannot be re-requested (the host is silent for a scope the
+    // token already holds), so the copy must not promise a dialog.
+    expect(estimateFailureCopy('needs-approval', 'Qx Stack').body).toMatch(/^Civitai didn’t accept your spending approval for pricing\. Reload the app/);
+    expect(estimateFailureCopy('needs-approval', 'Qx Stack').body).not.toMatch(/dialog/);
   });
 });
