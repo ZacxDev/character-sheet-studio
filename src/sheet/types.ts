@@ -1,10 +1,10 @@
 /**
  * Character Sheet Studio — data model + storage key scheme.
  *
- * Everything the app persists lives in the host-mediated `useAppStorage` KV
- * store (see `./store.ts`). The store is namespaced per (block instance,
- * viewer) and budgeted per (app, viewer); rows are small on purpose — ids,
- * prompts and Civitai-hosted urls, never image bytes.
+ * Everything the app persists lives in the document store's private `kv`
+ * collection (see `./kv-store.ts` and `./store.ts`): one key space and one
+ * budget per (app, viewer); documents are small on purpose — ids, prompts and
+ * Civitai-hosted urls, never image bytes (the store caps a document at 64 KiB).
  *
  * Key scheme (versioned, Prompt Lab / Style Explorer convention):
  *   v1:char:<uuid>     one Character
@@ -12,8 +12,9 @@
  *   v1:sheet:<uuid>    one SheetJob (a batch of panels + their workflow ids)
  *   v1:settings        SheetSettings singleton
  *
- * Keys are constructed here, never from user input, so they stay far under
- * the host's 200-character key cap. Malformed rows are dropped by the
+ * Keys are constructed here, never from user input, so they stay inside the
+ * document store's key rule (`^[A-Za-z0-9._:-]{1,128}$`). 🔴 They are also the
+ * legacy KV keys verbatim — the cutover copy depends on that; never rename one. Malformed rows are dropped by the
  * `normalize*` functions — storage is best-effort, the in-memory state is the
  * source of truth.
  */
@@ -98,6 +99,18 @@ export interface Character {
   triggerWords: string[];
   negativePrompt: string;
   referenceImage?: CharacterRefImage;
+  /**
+   * Explicitly chosen profile image (display-only; picked from the
+   * character's generated images in the edit form). When unset, the profile
+   * resolves to the first generated image — see sheet/profile.ts. Never
+   * feeds generation; the img2img source is `referenceImage`.
+   */
+  profileImageUrl?: string;
+  /**
+   * Legacy per-character stack link from older saves. It is retained only so
+   * those records normalize unchanged; the app no longer writes or reads it —
+   * a stack is chosen in the Sheet Builder for each run.
+   */
   defaultStackId?: string;
   seedPolicy: SeedPolicy;
   createdAt: string;
@@ -121,6 +134,7 @@ export function normalizeCharacter(v: unknown): Character | null {
   if (id === null || name === null) return null;
   const seedPolicy = v.seedPolicy === 'varied' ? 'varied' : 'locked';
   const refImage = normalizeRefImage(v.referenceImage);
+  const profileImageUrl = asNonEmptyString(v.profileImageUrl) ?? undefined;
   const defaultStackId = asNonEmptyString(v.defaultStackId) ?? undefined;
   return {
     id,
@@ -130,6 +144,7 @@ export function normalizeCharacter(v: unknown): Character | null {
     triggerWords: asStringArray(v.triggerWords),
     negativePrompt: asString(v.negativePrompt) ?? '',
     ...(refImage ? { referenceImage: refImage } : {}),
+    ...(profileImageUrl ? { profileImageUrl } : {}),
     ...(defaultStackId ? { defaultStackId } : {}),
     seedPolicy,
     createdAt: asString(v.createdAt) ?? isoNow(),
@@ -144,6 +159,7 @@ export function newCharacter(init: {
   triggerWords?: string[];
   negativePrompt?: string;
   referenceImage?: CharacterRefImage;
+  profileImageUrl?: string;
   defaultStackId?: string;
   seedPolicy?: SeedPolicy;
 }): Character {
@@ -156,6 +172,7 @@ export function newCharacter(init: {
     triggerWords: init.triggerWords ?? [],
     negativePrompt: init.negativePrompt ?? '',
     ...(init.referenceImage ? { referenceImage: init.referenceImage } : {}),
+    ...(init.profileImageUrl ? { profileImageUrl: init.profileImageUrl } : {}),
     ...(init.defaultStackId ? { defaultStackId: init.defaultStackId } : {}),
     seedPolicy: init.seedPolicy ?? 'locked',
     createdAt: now,
@@ -181,6 +198,12 @@ export interface StackLora {
   strength: number;
   triggerWords: string[];
   name?: string;
+  /**
+   * The LoRA's base-model family (captured at pick time). Optional so stacks
+   * saved before this field existed stay valid — an unknown family simply
+   * can't be mismatch-warned about.
+   */
+  baseModel?: string;
 }
 
 export interface ModelStack {
@@ -208,11 +231,13 @@ function normalizeStackLora(v: unknown): StackLora | null {
   const modelVersionId = asInt(v.modelVersionId);
   if (modelVersionId === null || modelVersionId <= 0) return null;
   const name = asNonEmptyString(v.name) ?? undefined;
+  const baseModel = asNonEmptyString(v.baseModel) ?? undefined;
   return {
     modelVersionId,
     strength: clampLoraStrength(asNumber(v.strength) ?? 1),
     triggerWords: asStringArray(v.triggerWords),
     ...(name ? { name } : {}),
+    ...(baseModel ? { baseModel } : {}),
   };
 }
 
@@ -390,19 +415,41 @@ export interface SheetPanel extends PanelSpec {
   id: string;
   /** Per-panel seed: sheet seed + panel index offset (locked) or random (varied). */
   seed: number;
+  /**
+   * AI-enhanced prompt (via the chat-completion step in the Builder). When
+   * set, the composer uses it VERBATIM as the generation prompt — it was
+   * rewritten from the fully-composed prompt, so identity clauses and trigger
+   * words are already inside it. Stored on the panel so regenerates stay
+   * byte-identical to the original run.
+   */
+  enhancedPrompt?: string;
   /** Set once submitted — the resumability anchor. */
   workflowId?: string;
   status: PanelStatus;
+  /**
+   * When this panel last entered `running` (ISO). Drives the elapsed-time
+   * readout; persisted so a sheet reopened mid-generation shows the true
+   * wait, not a restarted clock.
+   */
+  startedAt?: string;
+  /** The Buzz total quoted at confirm for this panel (display only). */
+  cost?: number;
   outputs: string[];
   /** App-owned failure code, never raw server prose. */
   errorCode?: string;
+  /** Set after a successful Publish — the panel shows a persistent marker. */
+  published?: boolean;
+  /** Set after this panel joined a Civitai post (Post button) — persistent marker. */
+  posted?: boolean;
+  /** URL of the Civitai post this panel's image landed in. */
+  postUrl?: string;
   /**
-   * Incremented on every (re)submit. The idempotency key is
-   * `sheetId-panelId-submitNonce` (dashes — the host rejects anything outside
-   * /^[A-Za-z0-9_-]{1,64}$/): a retry after a lost response reuses the
-   * key (same nonce → the host collapses it to one charge), while a
-   * regenerate bumps the nonce so the orchestrator treats it as a new
-   * logical submit.
+   * Incremented on every (re)submit. The idempotency key is a bounded hash of
+   * sheetId + panelId + submitNonce (the host rejects anything outside
+   * /^[A-Za-z0-9_-]{1,64}$/, and raw UUIDs would exceed that joined): a
+   * retry after a lost response reuses the key (same nonce → the host
+   * collapses it to one charge), while a regenerate bumps the nonce so the
+   * orchestrator treats it as a new logical submit.
    */
   submitNonce: number;
 }
@@ -416,16 +463,26 @@ function normalizeSheetPanel(v: unknown): SheetPanel | null {
   const status = isPanelStatus(v.status) ? v.status : 'queued';
   const workflowId = asNonEmptyString(v.workflowId) ?? undefined;
   const errorCode = asNonEmptyString(v.errorCode) ?? undefined;
+  const enhancedPrompt = asNonEmptyString(v.enhancedPrompt) ?? undefined;
+  const postUrl = asNonEmptyString(v.postUrl) ?? undefined;
+  const startedAt = asNonEmptyString(v.startedAt) ?? undefined;
+  const cost = asNumber(v.cost) ?? undefined;
   return {
     id,
     kind: v.kind,
     label: asNonEmptyString(v.label) ?? PANEL_LABELS[v.kind],
     promptModifier: asString(v.promptModifier) ?? '',
     seed,
+    ...(enhancedPrompt ? { enhancedPrompt } : {}),
     ...(workflowId ? { workflowId } : {}),
     status,
+    ...(startedAt ? { startedAt } : {}),
+    ...(cost !== undefined ? { cost } : {}),
     outputs: asStringArray(v.outputs),
     ...(errorCode ? { errorCode } : {}),
+    ...(v.published === true ? { published: true } : {}),
+    ...(v.posted === true ? { posted: true } : {}),
+    ...(postUrl ? { postUrl } : {}),
     submitNonce: asInt(v.submitNonce) ?? 0,
   };
 }
@@ -433,6 +490,15 @@ function normalizeSheetPanel(v: unknown): SheetPanel | null {
 // --- SheetJob ------------------------------------------------------------------
 
 export type SheetStatus = 'draft' | 'running' | 'paused' | 'complete' | 'failed';
+
+/** User-facing sheet status words (raw status values never reach the UI). */
+export const SHEET_STATUS_LABEL: Record<SheetStatus, string> = {
+  draft: 'Not started',
+  running: 'Generating',
+  paused: 'Partially done',
+  complete: 'Complete',
+  failed: 'Failed',
+};
 
 export function isSheetStatus(v: unknown): v is SheetStatus {
   return (
@@ -457,6 +523,8 @@ export interface SheetJob {
   useReference: boolean;
   status: SheetStatus;
   panels: SheetPanel[];
+  /** URL of the Civitai post created by "Post sheet" (all done panels at once). */
+  postUrl?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -479,6 +547,7 @@ export function normalizeSheetJob(v: unknown): SheetJob | null {
   }
   if (panels.length === 0) return null;
   const account = v.account === 'blue' || v.account === 'green' || v.account === 'yellow' ? v.account : 'auto';
+  const postUrl = asNonEmptyString(v.postUrl) ?? undefined;
   return {
     id,
     name: asNonEmptyString(v.name) ?? 'Untitled sheet',
@@ -489,6 +558,7 @@ export function normalizeSheetJob(v: unknown): SheetJob | null {
     useReference: v.useReference === true,
     status: isSheetStatus(v.status) ? v.status : 'draft',
     panels,
+    ...(postUrl ? { postUrl } : {}),
     createdAt: asString(v.createdAt) ?? isoNow(),
     updatedAt: asString(v.updatedAt) ?? isoNow(),
   };

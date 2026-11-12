@@ -274,3 +274,57 @@ describe('collection helpers', () => {
     expect(removeById([{ id: 'a' }, { id: 'b' }], 'a')).toEqual([{ id: 'b' }]);
   });
 });
+
+describe('enhance/post persistence fields', () => {
+  const rawPanel = {
+    id: 'p1',
+    kind: 'front',
+    label: 'Front view',
+    promptModifier: 'front view',
+    seed: 7,
+    status: 'done',
+    outputs: ['u1'],
+    submitNonce: 1,
+  };
+  const rawJob = {
+    id: 's1',
+    name: 'Sheet',
+    characterId: 'c1',
+    stackId: 'st1',
+    seed: 7,
+    panels: [rawPanel],
+  };
+
+  it('keeps enhancedPrompt / posted / postUrl on panels, drops blanks', () => {
+    const job = normalizeSheetJob({
+      ...rawJob,
+      panels: [
+        {
+          ...rawPanel,
+          enhancedPrompt: 'rewritten prompt',
+          posted: true,
+          postUrl: 'https://civitai.com/posts/9',
+        },
+      ],
+    });
+    expect(job?.panels[0].enhancedPrompt).toBe('rewritten prompt');
+    expect(job?.panels[0].posted).toBe(true);
+    expect(job?.panels[0].postUrl).toBe('https://civitai.com/posts/9');
+
+    const blank = normalizeSheetJob({
+      ...rawJob,
+      panels: [{ ...rawPanel, enhancedPrompt: '   ', posted: false, postUrl: '' }],
+    });
+    expect(blank?.panels[0].enhancedPrompt).toBeUndefined();
+    expect(blank?.panels[0].posted).toBeUndefined();
+    expect(blank?.panels[0].postUrl).toBeUndefined();
+  });
+
+  it('keeps the sheet-level postUrl, drops blanks', () => {
+    expect(
+      normalizeSheetJob({ ...rawJob, postUrl: 'https://civitai.com/posts/9' })?.postUrl,
+    ).toBe('https://civitai.com/posts/9');
+    expect(normalizeSheetJob({ ...rawJob, postUrl: ' ' })?.postUrl).toBeUndefined();
+    expect(normalizeSheetJob(rawJob)?.postUrl).toBeUndefined();
+  });
+});
