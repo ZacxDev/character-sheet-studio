@@ -93,7 +93,8 @@ export function isTerminalStatus(status: BlockWorkflowSnapshot['status']): boole
  * `BlockWorkflowOutput` from @civitai/app-sdk >= 0.89, declared here because
  * the bundled SDK (0.51) predates it. blocks-react's inbound validator is a
  * pass-through predicate, so the host's extra fields reach the app as sent.
- * Exactly one shape per entry: an available `{ url }`, `{ restricted, reason }`,
+ * Exactly one shape per entry: an available `{ url }`, `{ restricted, reason }`
+ * (`reason`: `unrated` | `ceiling` | `pool` | `blocked`, civitai#9328),
  * `{ pending }` (not rated yet) or `{ blocked }` (moderation). Only the first
  * carries a url.
  */
@@ -157,12 +158,42 @@ export function snapshotImages(snapshot: BlockWorkflowSnapshot): {
     )
     .map((o) => o.url as string);
   if (urls.length > 0) return { urls, lock: undefined };
-  if (outputs.some((o) => o.restricted === true)) return { urls, lock: 'restricted' };
-  if (outputs.some((o) => o.blocked === true)) return { urls, lock: 'blocked' };
-  if (outputs.some((o) => o.pending === true) || isRatingPending(snapshot)) {
-    return { urls, lock: 'rating-pending' };
+  const locks = outputs.map(outputLock).filter((l): l is PanelLock => l !== undefined);
+  if (isRatingPending(snapshot)) locks.push('rating-pending');
+  // Several outputs, no url: the most recoverable lock wins, so a panel that a
+  // later poll could still fill is never filed as permanent.
+  const lock = LOCK_PRECEDENCE.find((l) => locks.includes(l));
+  return { urls, lock };
+}
+
+/** Most recoverable first; `pool` / `blocked` (permanent) last. */
+const LOCK_PRECEDENCE: readonly PanelLock[] = [
+  'rating-pending',
+  'unrated',
+  'ceiling',
+  'restricted',
+  'pool',
+  'blocked',
+];
+
+/** The lock one url-less output entry stands for (undefined: none). */
+function outputLock(o: SnapshotOutput): PanelLock | undefined {
+  if (o.pending === true) return 'rating-pending';
+  if (o.blocked === true) return 'blocked';
+  if (o.restricted !== true) return undefined;
+  switch (o.reason) {
+    case 'unrated':
+      return 'unrated';
+    case 'ceiling':
+      return 'ceiling';
+    case 'pool':
+      return 'pool';
+    case 'blocked':
+      return 'blocked';
+    default:
+      // A reason this build does not know (or none): not assumed permanent.
+      return 'restricted';
   }
-  return { urls, lock: undefined };
 }
 
 /**

@@ -180,7 +180,7 @@ describe('panelPatchForFinal', () => {
       panelPatchForFinal(
         snap({ status: 'succeeded', imageUrls: [], outputs: [{ restricted: true, reason: 'pool' }] }),
       ),
-    ).toEqual({ outputs: [], locked: 'restricted' });
+    ).toEqual({ outputs: [], locked: 'pool' });
   });
 
   it('a moderation-blocked output yields the unavailable lock', () => {
@@ -331,7 +331,7 @@ describe('Sheet View with a rating-pending host', () => {
     expect(tile).toHaveTextContent(/Restricted/);
     expect(document.body).not.toHaveTextContent('No image yet');
     expect(screen.queryByRole('img', { name: 'Front view' })).toBeNull();
-    expect(lastPanel(saved)).toMatchObject({ status: 'done', outputs: [], locked: 'restricted' });
+    expect(lastPanel(saved)).toMatchObject({ status: 'done', outputs: [], locked: 'ceiling' });
   }, 15000);
 
   it('repair: a done panel saved with no image is re-polled on open and the recovered url saved', async () => {

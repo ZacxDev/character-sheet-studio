@@ -106,19 +106,31 @@ const STATUS_COLOR: Record<SheetPanel['status'], string> = {
   canceled: 'warning',
 };
 
+const STILL_CHECKING = {
+  title: 'Still being checked',
+  body: 'This image is still being rated. Reopen the sheet in a few minutes to load it.',
+};
 /** Locked-tile copy for a done panel the host returned no image for. */
 const LOCK_COPY: Record<PanelLock, { title: string; body: string }> = {
-  restricted: {
+  'rating-pending': STILL_CHECKING,
+  unrated: STILL_CHECKING,
+  ceiling: {
     title: 'Restricted',
     body: 'This image is above your content settings, so it can’t be shown here.',
+  },
+  // The paying account's pool, not the viewer's settings: never suggest a
+  // settings change that cannot help.
+  pool: {
+    title: 'Restricted',
+    body: 'Not available for this account’s content level.',
+  },
+  restricted: {
+    title: 'Restricted',
+    body: 'This image can’t be shown here.',
   },
   blocked: {
     title: 'Unavailable',
     body: 'This image was blocked by moderation.',
-  },
-  'rating-pending': {
-    title: 'Still being checked',
-    body: 'This image is still being rated. Reopen the sheet in a minute to load it.',
   },
 };
 
@@ -234,6 +246,13 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
     }
   }, [library.sheets, sheetId]);
 
+  // Every save of this sheet goes through ONE chain. The store writes the whole
+  // document (last writer wins), and each mutator builds on the previous
+  // in-memory result — so saves issued in order must also LAND in order, or an
+  // older snapshot can overwrite a newer one (two repairs finishing together
+  // dropped one of the recovered images).
+  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+
   /** Apply a mutator to the current sheet, render it, and persist best-effort. */
   const updateSheet = useCallback(
     async (mut: (s: SheetJob) => SheetJob): Promise<void> => {
@@ -243,8 +262,12 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       next.status = deriveSheetStatus(next.panels);
       sheetRef.current = next;
       setSheet(next);
-      const saveErr = await library.saveSheet(next);
-      if (saveErr) setError(storeErrorMessage(saveErr));
+      const save = saveChainRef.current.then(async () => {
+        const saveErr = await library.saveSheet(next);
+        if (saveErr) setError(storeErrorMessage(saveErr));
+      });
+      saveChainRef.current = save.catch(() => undefined);
+      await save;
     },
     [library],
   );
@@ -352,9 +375,37 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
   const startPanelLoopRef = useRef(startPanelLoop);
   startPanelLoopRef.current = startPanelLoop;
 
+  // Repair results waiting to be written. Repairs that finish together are
+  // applied in ONE updater (one save); the save chain orders the rest.
+  const repairPatchesRef = useRef(
+    new Map<string, { workflowId: string; outputs: string[]; locked: PanelLock | undefined }>(),
+  );
+  const repairFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const repairOpenRef = useRef<{ sheetId: string; ids: Set<string> } | null>(null);
+
+  const flushRepairPatches = useCallback(() => {
+    repairFlushRef.current = null;
+    const patches = repairPatchesRef.current;
+    if (patches.size === 0) return;
+    repairPatchesRef.current = new Map();
+    void updateSheetRef.current((s) => ({
+      ...s,
+      panels: s.panels.map((p) => {
+        const patch = patches.get(p.id);
+        // Never overwrite a panel that has outputs or moved on meanwhile.
+        if (!patch || p.status !== 'done' || p.workflowId !== patch.workflowId || p.outputs.length > 0) {
+          return p;
+        }
+        return { ...p, outputs: patch.outputs, locked: patch.locked };
+      }),
+    }));
+  }, []);
+
   /**
    * Repair a DONE panel saved without an image (see `repairablePanels`): poll
    * its workflow with the same bounded loop and save what the host now returns.
+   * The attempt itself is recorded on open, before polling (see the resume
+   * effect), so an error, an unreachable host or a closed tab still counts.
    * Only a settled snapshot writes urls; a failure / unreachable host / a panel
    * that changed meanwhile leaves the panel exactly as it was.
    */
@@ -378,11 +429,10 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
           const patch = panelPatchForFinal(snap);
           if (!patch) return;
           if (patch.outputs.length === 0 && patch.locked === current.locked) return;
-          void setPanel(panelId, (p) =>
-            p.status === 'done' && p.workflowId === workflowId && p.outputs.length === 0
-              ? { ...p, outputs: patch.outputs, locked: patch.locked }
-              : p,
-          );
+          repairPatchesRef.current.set(panelId, { workflowId, ...patch });
+          if (repairFlushRef.current === null) {
+            repairFlushRef.current = setTimeout(flushRepairPatches, 0);
+          }
         },
         onUnreachable: () => {
           stopPanelLoop(panelId);
@@ -390,7 +440,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       });
       pollLoopsRef.current.set(panelId, cancelLoop);
     },
-    [setPanel, stopPanelLoop],
+    [flushRepairPatches, stopPanelLoop],
   );
   const startRepairLoopRef = useRef(startRepairLoop);
   startRepairLoopRef.current = startRepairLoop;
@@ -418,12 +468,47 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
     for (const panel of resumablePanels(cur.panels)) {
       startPanelLoopRef.current(panel.id, panel.workflowId as string);
     }
-    // One repair pass per open for done panels saved with no image.
-    for (const panel of repairablePanels(cur.panels)) {
-      startRepairLoopRef.current(panel.id, panel.workflowId as string);
+    // Repair done panels saved with no image — bounded per panel by its
+    // `repair` record, which is written (one save for all of them) BEFORE
+    // polling, so every attempt counts however it ends.
+    // `repairOpenRef` remembers which panels THIS open already counted, so an
+    // effect re-run within the same open (StrictMode's dev double-invoke)
+    // restarts their loops without counting a second attempt.
+    if (repairOpenRef.current?.sheetId !== sheetId) {
+      repairOpenRef.current = { sheetId, ids: new Set() };
+    }
+    const counted = repairOpenRef.current.ids;
+    const repairs = repairablePanels(cur.panels).filter((p) => !counted.has(p.id));
+    for (const p of repairs) counted.add(p.id);
+    if (repairs.length > 0) {
+      const lastAt = new Date().toISOString();
+      const ids = new Set(repairs.map((p) => p.id));
+      void updateSheetRef.current((s) => ({
+        ...s,
+        panels: s.panels.map((p) =>
+          ids.has(p.id)
+            ? { ...p, repair: { attempts: (p.repair?.attempts ?? 0) + 1, lastAt } }
+            : p,
+        ),
+      }));
+    }
+    for (const panel of cur.panels) {
+      if (
+        counted.has(panel.id) &&
+        panel.status === 'done' &&
+        !!panel.workflowId &&
+        panel.outputs.length === 0
+      ) {
+        startRepairLoopRef.current(panel.id, panel.workflowId);
+      }
     }
     return () => {
       stopAllPanelLoops();
+      // A result that arrived but was not written yet is still written.
+      if (repairFlushRef.current !== null) {
+        clearTimeout(repairFlushRef.current);
+        flushRepairPatches();
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sheetId, sheetPresent]);
@@ -464,6 +549,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
         workflowId: undefined,
         outputs: [],
         locked: undefined,
+        repair: undefined,
         errorCode: undefined,
       };
       const body = buildSheetPanelBody(next, character, stack, library.settings, {
@@ -536,6 +622,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
           workflowId: undefined,
           outputs: [],
           locked: undefined,
+          repair: undefined,
           errorCode: undefined,
         };
         const body = buildSheetPanelBody(next, character, stack, library.settings, {

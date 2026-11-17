@@ -5,7 +5,7 @@
 // deterministic rule lives here.
 
 import type { SeedPolicy, SheetPanel, SheetStatus } from './types.js';
-import { isTerminalPanelStatus } from './types.js';
+import { PERMANENT_PANEL_LOCKS, isTerminalPanelStatus } from './types.js';
 import type { BlockWorkflowSnapshot } from '@civitai/app-sdk/blocks';
 
 import type { PricedFailureKind } from '../money/generation.js';
@@ -109,21 +109,42 @@ export function panelPatchForFinal(
   return { outputs: urls, locked: urls.length > 0 ? undefined : lock };
 }
 
+/** Repair polls per panel, ever. */
+export const REPAIR_MAX_ATTEMPTS = 3;
 /**
- * Done panels saved WITHOUT an image that may still have one: a workflowId, no
- * outputs, and not permanently locked (restricted / blocked never change).
- * Sheet View re-polls these once per open — the repair for panels saved empty
- * by builds that stopped polling at the first `succeeded` while the host was
- * still rating the image.
+ * Minimum gap before repair attempt N+1, indexed by attempts already made - 1
+ * (attempt 1 runs on the first open). The host masks an unrated output for up
+ * to 5 minutes, so a sooner re-poll would mostly see the same answer.
  */
-export function repairablePanels(panels: readonly SheetPanel[]): SheetPanel[] {
+export const REPAIR_SPACING_MS: readonly number[] = [5 * 60_000, 30 * 60_000];
+
+/** May a panel with this repair record be re-polled at `now`? */
+export function repairDue(repair: SheetPanel['repair'], now: number): boolean {
+  if (!repair) return true;
+  if (repair.attempts >= REPAIR_MAX_ATTEMPTS) return false;
+  const last = Date.parse(repair.lastAt);
+  if (!Number.isFinite(last)) return true;
+  const gap = REPAIR_SPACING_MS[Math.min(repair.attempts, REPAIR_SPACING_MS.length) - 1] ?? 0;
+  return now - last >= gap;
+}
+
+/**
+ * Done panels saved WITHOUT an image that may still get one, and are due for a
+ * repair poll: a workflowId, no outputs, not permanently locked (`pool` /
+ * `blocked` — see PERMANENT_PANEL_LOCKS; `unrated` and `ceiling` CAN change),
+ * and inside the repair budget (`repairDue`). Sheet View re-polls these on
+ * open and records each attempt on the panel before polling — the repair for
+ * panels saved empty (an unrated output, a viewer ceiling, or builds that
+ * stopped polling at the first `succeeded` while the host was still rating).
+ */
+export function repairablePanels(panels: readonly SheetPanel[], now: number = Date.now()): SheetPanel[] {
   return panels.filter(
     (p) =>
       p.status === 'done' &&
       !!p.workflowId &&
       p.outputs.length === 0 &&
-      p.locked !== 'restricted' &&
-      p.locked !== 'blocked',
+      !(p.locked && PERMANENT_PANEL_LOCKS.has(p.locked)) &&
+      repairDue(p.repair, now),
   );
 }
 
