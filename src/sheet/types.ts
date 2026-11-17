@@ -411,6 +411,60 @@ export function defaultPanelSpecs(): PanelSpec[] {
   ];
 }
 
+/**
+ * Why a finished panel has no image to show — the host's restricted `reason`
+ * carried through (civitai#9328):
+ * - `rating-pending`: the snapshot still said "being rated" when our poll
+ *   window ended.
+ * - `unrated`: the host's masking window ended before the rating landed; a
+ *   later poll returns the url once it does.
+ * - `ceiling`: above the VIEWER's own content level — changes if they change
+ *   their settings.
+ * - `restricted`: restricted with a reason this build does not know.
+ * - `pool`: above the PAYING Buzz account's pool — not fixable in the viewer's
+ *   settings.
+ * - `blocked`: moderation.
+ * Only `pool` and `blocked` are permanent (`PERMANENT_PANEL_LOCKS`); every
+ * other lock is re-polled on open, bounded by the panel's `repair` record.
+ */
+export type PanelLock = 'rating-pending' | 'unrated' | 'ceiling' | 'restricted' | 'pool' | 'blocked';
+
+const PANEL_LOCKS: ReadonlySet<string> = new Set<PanelLock>([
+  'rating-pending',
+  'unrated',
+  'ceiling',
+  'restricted',
+  'pool',
+  'blocked',
+]);
+
+export function isPanelLock(v: unknown): v is PanelLock {
+  return typeof v === 'string' && PANEL_LOCKS.has(v);
+}
+
+/** Locks a later poll cannot lift: never re-polled. */
+export const PERMANENT_PANEL_LOCKS: ReadonlySet<PanelLock> = new Set<PanelLock>(['pool', 'blocked']);
+
+/**
+ * Repair-on-open bookkeeping for a done panel saved without an image: how many
+ * repair polls were started and when the last one began (ISO). Bounds the
+ * re-polling (see `repairablePanels`).
+ */
+export interface PanelRepair {
+  attempts: number;
+  lastAt: string;
+}
+
+function normalizePanelRepair(v: unknown): PanelRepair | null {
+  if (!isRecord(v)) return null;
+  const attempts = asInt(v.attempts);
+  const lastAt = asNonEmptyString(v.lastAt);
+  if (attempts === null || attempts < 1 || lastAt === null || !Number.isFinite(Date.parse(lastAt))) {
+    return null;
+  }
+  return { attempts, lastAt };
+}
+
 export interface SheetPanel extends PanelSpec {
   id: string;
   /** Per-panel seed: sheet seed + panel index offset (locked) or random (varied). */
@@ -435,6 +489,14 @@ export interface SheetPanel extends PanelSpec {
   /** The Buzz total quoted at confirm for this panel (display only). */
   cost?: number;
   outputs: string[];
+  /**
+   * Set on a `done` panel with no image: why the host returned none. Shown as a
+   * locked tile instead of "No image yet". Done panels with no image and a
+   * non-permanent lock (or none) are re-polled when the sheet opens.
+   */
+  locked?: PanelLock;
+  /** Repair-on-open attempts for a done panel with no image (bounded). */
+  repair?: PanelRepair;
   /** App-owned failure code, never raw server prose. */
   errorCode?: string;
   /** Set after a successful Publish — the panel shows a persistent marker. */
@@ -467,6 +529,7 @@ function normalizeSheetPanel(v: unknown): SheetPanel | null {
   const postUrl = asNonEmptyString(v.postUrl) ?? undefined;
   const startedAt = asNonEmptyString(v.startedAt) ?? undefined;
   const cost = asNumber(v.cost) ?? undefined;
+  const repair = normalizePanelRepair(v.repair);
   return {
     id,
     kind: v.kind,
@@ -479,6 +542,8 @@ function normalizeSheetPanel(v: unknown): SheetPanel | null {
     ...(startedAt ? { startedAt } : {}),
     ...(cost !== undefined ? { cost } : {}),
     outputs: asStringArray(v.outputs),
+    ...(isPanelLock(v.locked) ? { locked: v.locked } : {}),
+    ...(repair ? { repair } : {}),
     ...(errorCode ? { errorCode } : {}),
     ...(v.published === true ? { published: true } : {}),
     ...(v.posted === true ? { posted: true } : {}),

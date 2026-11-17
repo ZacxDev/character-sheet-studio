@@ -41,7 +41,7 @@ import {
   estimateFailureCopy,
   formatCost,
   hasBudgetedScope,
-  isTerminalStatus,
+  isSettledSnapshot,
 } from '../money/generation.js';
 import { startPollLoop } from '../money/pollLoop.js';
 import { buildSheetPanelBody } from '../sheet/body.js';
@@ -56,11 +56,13 @@ import {
   deriveSheetStatus,
   idempotencyKeyFor,
   panelErrorCopy,
+  panelPatchForFinal,
   pricedKindToErrorCode,
+  repairablePanels,
   resumablePanels,
   type PanelErrorCode,
 } from '../sheet/batch.js';
-import type { SheetJob, SheetPanel } from '../sheet/types.js';
+import type { PanelLock, SheetJob, SheetPanel } from '../sheet/types.js';
 import { isTerminalPanelStatus } from '../sheet/types.js';
 import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
 import { storeErrorMessage } from './common.js';
@@ -102,6 +104,34 @@ const STATUS_COLOR: Record<SheetPanel['status'], string> = {
   done: 'success',
   failed: 'error',
   canceled: 'warning',
+};
+
+const STILL_CHECKING = {
+  title: 'Still being checked',
+  body: 'This image is still being rated. Reopen the sheet in a few minutes to load it.',
+};
+/** Locked-tile copy for a done panel the host returned no image for. */
+const LOCK_COPY: Record<PanelLock, { title: string; body: string }> = {
+  'rating-pending': STILL_CHECKING,
+  unrated: STILL_CHECKING,
+  ceiling: {
+    title: 'Restricted',
+    body: 'This image is above your content settings, so it can’t be shown here.',
+  },
+  // The paying account's pool, not the viewer's settings: never suggest a
+  // settings change that cannot help.
+  pool: {
+    title: 'Restricted',
+    body: 'Not available for this account’s content level.',
+  },
+  restricted: {
+    title: 'Restricted',
+    body: 'This image can’t be shown here.',
+  },
+  blocked: {
+    title: 'Unavailable',
+    body: 'This image was blocked by moderation.',
+  },
 };
 
 /** Error codes where a retry reuses the same idempotency key (same nonce). */
@@ -216,6 +246,13 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
     }
   }, [library.sheets, sheetId]);
 
+  // Every save of this sheet goes through ONE chain. The store writes the whole
+  // document (last writer wins), and each mutator builds on the previous
+  // in-memory result — so saves issued in order must also LAND in order, or an
+  // older snapshot can overwrite a newer one (two repairs finishing together
+  // dropped one of the recovered images).
+  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+
   /** Apply a mutator to the current sheet, render it, and persist best-effort. */
   const updateSheet = useCallback(
     async (mut: (s: SheetJob) => SheetJob): Promise<void> => {
@@ -225,8 +262,12 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       next.status = deriveSheetStatus(next.panels);
       sheetRef.current = next;
       setSheet(next);
-      const saveErr = await library.saveSheet(next);
-      if (saveErr) setError(storeErrorMessage(saveErr));
+      const save = saveChainRef.current.then(async () => {
+        const saveErr = await library.saveSheet(next);
+        if (saveErr) setError(storeErrorMessage(saveErr));
+      });
+      saveChainRef.current = save.catch(() => undefined);
+      await save;
     },
     [library],
   );
@@ -280,7 +321,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
     (panelId: string, workflowId: string) => {
       stopPanelLoop(panelId);
       const cancelLoop = startPollLoop(pollRef.current, workflowId, {
-        onSnapshot: (snap: BlockWorkflowSnapshot) => {
+        onSnapshot: (snap: BlockWorkflowSnapshot, final: boolean) => {
           const current = sheetRef.current?.panels.find((p) => p.id === panelId);
           if (
             !current ||
@@ -290,15 +331,19 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
             stopPanelLoop(panelId);
             return;
           }
-          if (snap.status === 'succeeded') {
+          // `final`, not the status: a `succeeded` snapshot still being rated
+          // (image withheld, `ratingPending`) keeps the panel running.
+          const patch = final ? panelPatchForFinal(snap) : null;
+          if (patch) {
             stopPanelLoop(panelId);
             void setPanel(panelId, (p) => ({
               ...p,
               status: 'done',
-              outputs: snap.imageUrls ?? [],
+              outputs: patch.outputs,
+              locked: patch.locked,
               errorCode: undefined,
             }));
-          } else if (isTerminalStatus(snap.status)) {
+          } else if (final) {
             stopPanelLoop(panelId);
             void failPanel(
               panelId,
@@ -330,6 +375,76 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
   const startPanelLoopRef = useRef(startPanelLoop);
   startPanelLoopRef.current = startPanelLoop;
 
+  // Repair results waiting to be written. Repairs that finish together are
+  // applied in ONE updater (one save); the save chain orders the rest.
+  const repairPatchesRef = useRef(
+    new Map<string, { workflowId: string; outputs: string[]; locked: PanelLock | undefined }>(),
+  );
+  const repairFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const repairOpenRef = useRef<{ sheetId: string; ids: Set<string> } | null>(null);
+
+  const flushRepairPatches = useCallback(() => {
+    repairFlushRef.current = null;
+    const patches = repairPatchesRef.current;
+    if (patches.size === 0) return;
+    repairPatchesRef.current = new Map();
+    void updateSheetRef.current((s) => ({
+      ...s,
+      panels: s.panels.map((p) => {
+        const patch = patches.get(p.id);
+        // Never overwrite a panel that has outputs or moved on meanwhile.
+        if (!patch || p.status !== 'done' || p.workflowId !== patch.workflowId || p.outputs.length > 0) {
+          return p;
+        }
+        return { ...p, outputs: patch.outputs, locked: patch.locked };
+      }),
+    }));
+  }, []);
+
+  /**
+   * Repair a DONE panel saved without an image (see `repairablePanels`): poll
+   * its workflow with the same bounded loop and save what the host now returns.
+   * The attempt itself is recorded on open, before polling (see the resume
+   * effect), so an error, an unreachable host or a closed tab still counts.
+   * Only a settled snapshot writes urls; a failure / unreachable host / a panel
+   * that changed meanwhile leaves the panel exactly as it was.
+   */
+  const startRepairLoop = useCallback(
+    (panelId: string, workflowId: string) => {
+      stopPanelLoop(panelId);
+      const cancelLoop = startPollLoop(pollRef.current, workflowId, {
+        onSnapshot: (snap: BlockWorkflowSnapshot, final: boolean) => {
+          const current = sheetRef.current?.panels.find((p) => p.id === panelId);
+          if (
+            !current ||
+            current.workflowId !== workflowId ||
+            current.status !== 'done' ||
+            current.outputs.length > 0
+          ) {
+            stopPanelLoop(panelId);
+            return;
+          }
+          if (!final) return;
+          stopPanelLoop(panelId);
+          const patch = panelPatchForFinal(snap);
+          if (!patch) return;
+          if (patch.outputs.length === 0 && patch.locked === current.locked) return;
+          repairPatchesRef.current.set(panelId, { workflowId, ...patch });
+          if (repairFlushRef.current === null) {
+            repairFlushRef.current = setTimeout(flushRepairPatches, 0);
+          }
+        },
+        onUnreachable: () => {
+          stopPanelLoop(panelId);
+        },
+      });
+      pollLoopsRef.current.set(panelId, cancelLoop);
+    },
+    [flushRepairPatches, stopPanelLoop],
+  );
+  const startRepairLoopRef = useRef(startRepairLoop);
+  startRepairLoopRef.current = startRepairLoop;
+
   // Resume on open: attach a loop to every live workflow. Also heal any
   // panel persisted as 'running' WITHOUT a workflowId (zombie state left
   // behind by the pre-fix cancel bug) back to queued, where Submit is
@@ -353,8 +468,47 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
     for (const panel of resumablePanels(cur.panels)) {
       startPanelLoopRef.current(panel.id, panel.workflowId as string);
     }
+    // Repair done panels saved with no image — bounded per panel by its
+    // `repair` record, which is written (one save for all of them) BEFORE
+    // polling, so every attempt counts however it ends.
+    // `repairOpenRef` remembers which panels THIS open already counted, so an
+    // effect re-run within the same open (StrictMode's dev double-invoke)
+    // restarts their loops without counting a second attempt.
+    if (repairOpenRef.current?.sheetId !== sheetId) {
+      repairOpenRef.current = { sheetId, ids: new Set() };
+    }
+    const counted = repairOpenRef.current.ids;
+    const repairs = repairablePanels(cur.panels).filter((p) => !counted.has(p.id));
+    for (const p of repairs) counted.add(p.id);
+    if (repairs.length > 0) {
+      const lastAt = new Date().toISOString();
+      const ids = new Set(repairs.map((p) => p.id));
+      void updateSheetRef.current((s) => ({
+        ...s,
+        panels: s.panels.map((p) =>
+          ids.has(p.id)
+            ? { ...p, repair: { attempts: (p.repair?.attempts ?? 0) + 1, lastAt } }
+            : p,
+        ),
+      }));
+    }
+    for (const panel of cur.panels) {
+      if (
+        counted.has(panel.id) &&
+        panel.status === 'done' &&
+        !!panel.workflowId &&
+        panel.outputs.length === 0
+      ) {
+        startRepairLoopRef.current(panel.id, panel.workflowId);
+      }
+    }
     return () => {
       stopAllPanelLoops();
+      // A result that arrived but was not written yet is still written.
+      if (repairFlushRef.current !== null) {
+        clearTimeout(repairFlushRef.current);
+        flushRepairPatches();
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sheetId, sheetPresent]);
@@ -394,6 +548,8 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
         status: 'running',
         workflowId: undefined,
         outputs: [],
+        locked: undefined,
+        repair: undefined,
         errorCode: undefined,
       };
       const body = buildSheetPanelBody(next, character, stack, library.settings, {
@@ -465,6 +621,8 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
           status: 'running',
           workflowId: undefined,
           outputs: [],
+          locked: undefined,
+          repair: undefined,
           errorCode: undefined,
         };
         const body = buildSheetPanelBody(next, character, stack, library.settings, {
@@ -524,12 +682,16 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
           const snap: BlockWorkflowSnapshot = await submit(body, {
             idempotencyKey: idempotencyKeyFor(cur.id, panelId, next.submitNonce),
           });
-          if (isTerminalStatus(snap.status)) {
-            if (snap.status === 'succeeded') {
+          // Settled, not merely terminal: an instant `succeeded` still being
+          // rated falls through to the poll loop below.
+          if (isSettledSnapshot(snap)) {
+            const patch = panelPatchForFinal(snap);
+            if (patch) {
               await setPanel(panelId, () => ({
                 ...next,
                 status: 'done',
-                outputs: snap.imageUrls ?? [],
+                outputs: patch.outputs,
+                locked: patch.locked,
               }));
             } else {
               await failPanel(
@@ -1175,6 +1337,30 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
                       Generating…{elapsed ? ` ${elapsed}` : ''}
                       {panel.cost != null ? ` · ≈${formatCost(panel.cost)} Buzz` : ''}
                     </span>
+                  </div>
+                ) : panel.status === 'done' && panel.locked ? (
+                  <div
+                    data-testid="se-panel-locked"
+                    data-lock={panel.locked}
+                    role="note"
+                    aria-label={`${panel.label}: ${LOCK_COPY[panel.locked].title}`}
+                    style={{
+                      aspectRatio: '1 / 1',
+                      borderRadius: 6,
+                      background: 'var(--civitai-color-surface-2)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      textAlign: 'center',
+                      padding: 12,
+                      color: 'var(--civitai-color-text-dimmed)',
+                      fontSize: 13,
+                    }}
+                  >
+                    <strong>{LOCK_COPY[panel.locked].title}</strong>
+                    <span>{LOCK_COPY[panel.locked].body}</span>
                   </div>
                 ) : (
                   <div
