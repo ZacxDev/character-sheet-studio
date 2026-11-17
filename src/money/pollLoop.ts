@@ -20,15 +20,18 @@
 
 import type { BlockWorkflowSnapshot } from '@civitai/app-sdk/blocks';
 
-import { isTerminalStatus } from './generation.js';
+import { isSettledSnapshot, isTerminalStatus } from './generation.js';
 
 export interface PollLoopCallbacks {
   /**
-   * Every snapshot the loop receives (terminal or not). The caller maps
-   * terminal statuses to its own phases via `phaseForSnapshot` etc. A terminal
-   * snapshot STOPS the loop after this call.
+   * Every snapshot the loop receives (terminal or not). `final` is true on the
+   * LAST one — the loop stops after this call. Callers act on `final`, never on
+   * the status alone: a `succeeded` snapshot whose image is still being rated
+   * (`ratingPending`, civitai#8994) is NOT final — the loop keeps polling until
+   * the rating lands, or until `ratingPendingMaxMs` passes, in which case the
+   * still-pending snapshot is delivered with `final: true`.
    */
-  onSnapshot: (snap: BlockWorkflowSnapshot) => void;
+  onSnapshot: (snap: BlockWorkflowSnapshot, final: boolean) => void;
   /** The backend stayed unreachable past MAX_TRANSIENT_ERRORS consecutive throws. */
   onUnreachable: () => void;
 }
@@ -40,9 +43,16 @@ export interface PollLoopOptions {
   retryMs?: readonly number[];
   /** Give up after this many CONSECUTIVE transport throws. */
   maxTransientErrors?: number;
+  /**
+   * How long to keep polling a terminal snapshot that is still rating-pending,
+   * from the first such snapshot. Matches the SDK `watch` window (2 minutes).
+   */
+  ratingPendingMaxMs?: number;
+  /** Clock, injectable for tests. */
+  now?: () => number;
 }
 
-/** Drive one workflow to terminal. Returns a cancel function. */
+/** Drive one workflow to a final snapshot. Returns a cancel function. */
 export function startPollLoop(
   poll: (workflowId: string) => Promise<BlockWorkflowSnapshot>,
   workflowId: string,
@@ -57,10 +67,14 @@ export function startPollLoop(
   // Give up only after this many CONSECUTIVE transport failures (~30s of
   // retries at the default schedule) — a genuinely-down backend, not a blip.
   const MAX_TRANSIENT_ERRORS = opts.maxTransientErrors ?? 8;
+  const RATING_PENDING_MAX_MS = opts.ratingPendingMaxMs ?? 120_000;
+  const now = opts.now ?? Date.now;
 
   const tok = { cancelled: false };
   let attempt = 0;
   let consecutiveErrors = 0;
+  // When a terminal-but-rating-pending snapshot was first seen (bounds the wait).
+  let pendingSince: number | null = null;
 
   const tick = async () => {
     if (tok.cancelled) return;
@@ -85,8 +99,15 @@ export function startPollLoop(
     if (tok.cancelled) return;
     // A successful poll clears the transient-error streak.
     consecutiveErrors = 0;
-    cb.onSnapshot(snap);
-    if (isTerminalStatus(snap.status)) return;
+    let final = isSettledSnapshot(snap);
+    if (!final && isTerminalStatus(snap.status)) {
+      // Succeeded, rating pending: poll on, but not forever.
+      const t = now();
+      if (pendingSince === null) pendingSince = t;
+      else if (t - pendingSince >= RATING_PENDING_MAX_MS) final = true;
+    }
+    cb.onSnapshot(snap, final);
+    if (final) return;
     const delay = SCHEDULE_MS[Math.min(attempt, SCHEDULE_MS.length - 1)];
     attempt += 1;
     setTimeout(tick, delay);

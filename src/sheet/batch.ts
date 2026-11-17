@@ -6,7 +6,10 @@
 
 import type { SeedPolicy, SheetPanel, SheetStatus } from './types.js';
 import { isTerminalPanelStatus } from './types.js';
+import type { BlockWorkflowSnapshot } from '@civitai/app-sdk/blocks';
+
 import type { PricedFailureKind } from '../money/generation.js';
+import { isRatingPending, snapshotImages } from '../money/generation.js';
 
 /**
  * The host's constraint on the pattern (invalid_format → 400 on
@@ -87,6 +90,40 @@ export function nextPanelToSubmit(panels: readonly SheetPanel[]): SheetPanel | n
 export function resumablePanels(panels: readonly SheetPanel[]): SheetPanel[] {
   return panels.filter(
     (p) => p.workflowId && !isTerminalPanelStatus(p.status),
+  );
+}
+
+/**
+ * The panel fields a FINAL `succeeded` snapshot sets (null for any other
+ * status — failures are classified by the caller). A snapshot still
+ * rating-pending at the poll deadline saves NO url, even one already in
+ * `imageUrls`: the panel is marked `rating-pending` and re-polled on the next
+ * open, so only a settled snapshot ever writes outputs.
+ */
+export function panelPatchForFinal(
+  snap: BlockWorkflowSnapshot,
+): { outputs: string[]; locked: SheetPanel['locked'] } | null {
+  if (snap.status !== 'succeeded') return null;
+  if (isRatingPending(snap)) return { outputs: [], locked: 'rating-pending' };
+  const { urls, lock } = snapshotImages(snap);
+  return { outputs: urls, locked: urls.length > 0 ? undefined : lock };
+}
+
+/**
+ * Done panels saved WITHOUT an image that may still have one: a workflowId, no
+ * outputs, and not permanently locked (restricted / blocked never change).
+ * Sheet View re-polls these once per open — the repair for panels saved empty
+ * by builds that stopped polling at the first `succeeded` while the host was
+ * still rating the image.
+ */
+export function repairablePanels(panels: readonly SheetPanel[]): SheetPanel[] {
+  return panels.filter(
+    (p) =>
+      p.status === 'done' &&
+      !!p.workflowId &&
+      p.outputs.length === 0 &&
+      p.locked !== 'restricted' &&
+      p.locked !== 'blocked',
   );
 }
 

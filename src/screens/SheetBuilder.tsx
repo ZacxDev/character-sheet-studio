@@ -62,6 +62,7 @@ import {
   estimateFailureCopy,
   formatCost,
   hasBudgetedScope,
+  isSettledSnapshot,
   isTerminalStatus,
   type AccountChoice,
 } from '../money/generation.js';
@@ -76,6 +77,7 @@ import { composePanelPrompt } from '../sheet/prompt.js';
 import { startPollLoop } from '../money/pollLoop.js';
 import {
   idempotencyKeyFor,
+  panelPatchForFinal,
   pricedKindToErrorCode,
   resolvePanelSeed,
 } from '../sheet/batch.js';
@@ -560,11 +562,17 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
         const snap: BlockWorkflowSnapshot = await submit(body, {
           idempotencyKey: idempotencyKeyFor(job.id, panel.id, panel.submitNonce),
         });
-        if (isTerminalStatus(snap.status)) {
+        // Settled, not merely terminal: an instant `succeeded` whose image is
+        // still being rated (`ratingPending`) is handed to Sheet View's poll
+        // loop like any running panel (the else arm).
+        const settled = isSettledSnapshot(snap);
+        const patch = settled ? panelPatchForFinal(snap) : null;
+        if (settled) {
           // An instant terminal snapshot (cached success / instant priced refusal).
-          if (snap.status === 'succeeded') {
+          if (patch) {
             panel.status = 'done';
-            panel.outputs = snap.imageUrls ?? [];
+            panel.outputs = patch.outputs;
+            if (patch.locked) panel.locked = patch.locked;
           } else {
             panel.status = 'failed';
             panel.errorCode = pricedKindToErrorCode(classifyPricedFailure(snap.error));

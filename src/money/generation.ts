@@ -10,6 +10,7 @@ import type {
 } from '@civitai/app-sdk/blocks';
 
 import type { CheckpointOption, LoraOption } from '../models.js';
+import type { PanelLock } from '../sheet/types.js';
 import { clampLoraWeight, roundLoraWeight } from '../models.js';
 
 /** Server cap mirror — prompts over this are rejected by the workflow schema. */
@@ -85,6 +86,83 @@ const TERMINAL: ReadonlySet<BlockWorkflowSnapshot['status']> = new Set([
 
 export function isTerminalStatus(status: BlockWorkflowSnapshot['status']): boolean {
   return TERMINAL.has(status);
+}
+
+/**
+ * One entry of a snapshot's `outputs` (host civitai#8994+). Mirrors
+ * `BlockWorkflowOutput` from @civitai/app-sdk >= 0.89, declared here because
+ * the bundled SDK (0.51) predates it. blocks-react's inbound validator is a
+ * pass-through predicate, so the host's extra fields reach the app as sent.
+ * Exactly one shape per entry: an available `{ url }`, `{ restricted, reason }`,
+ * `{ pending }` (not rated yet) or `{ blocked }` (moderation). Only the first
+ * carries a url.
+ */
+export interface SnapshotOutput {
+  url?: unknown;
+  restricted?: unknown;
+  reason?: unknown;
+  pending?: unknown;
+  blocked?: unknown;
+}
+
+/** The snapshot's `outputs` list, or null when the host does not emit it. */
+export function snapshotOutputs(snapshot: BlockWorkflowSnapshot): SnapshotOutput[] | null {
+  const outputs = (snapshot as { outputs?: unknown }).outputs;
+  if (!Array.isArray(outputs)) return null;
+  return outputs.map((o) => (o && typeof o === 'object' ? (o as SnapshotOutput) : { restricted: true }));
+}
+
+/**
+ * Is an output still waiting for its rating? `ratingPending: true`, or any
+ * `{ pending: true }` entry. The host can report `succeeded` while this holds:
+ * the unrated image is withheld from `imageUrls` until the rating lands.
+ */
+export function isRatingPending(snapshot: BlockWorkflowSnapshot): boolean {
+  if ((snapshot as { ratingPending?: unknown }).ratingPending === true) return true;
+  return snapshotOutputs(snapshot)?.some((o) => o.pending === true) ?? false;
+}
+
+/**
+ * A snapshot that ends the panel: a terminal status, except `succeeded` while a
+ * rating is still pending (keep polling — the image is coming).
+ */
+export function isSettledSnapshot(snapshot: BlockWorkflowSnapshot): boolean {
+  if (!isTerminalStatus(snapshot.status)) return false;
+  return !(snapshot.status === 'succeeded' && isRatingPending(snapshot));
+}
+
+
+/**
+ * The displayable urls of a succeeded snapshot plus, when there are none, why.
+ * Urls come ONLY from what the host returned: available `outputs` entries when
+ * the host emits `outputs`, else `imageUrls` (older hosts).
+ */
+export function snapshotImages(snapshot: BlockWorkflowSnapshot): {
+  urls: string[];
+  lock: PanelLock | undefined;
+} {
+  const outputs = snapshotOutputs(snapshot);
+  if (outputs === null) {
+    const urls = (snapshot.imageUrls ?? []).filter((u): u is string => typeof u === 'string' && u !== '');
+    return { urls, lock: isRatingPending(snapshot) && urls.length === 0 ? 'rating-pending' : undefined };
+  }
+  const urls = outputs
+    .filter(
+      (o) =>
+        o.restricted !== true &&
+        o.pending !== true &&
+        o.blocked !== true &&
+        typeof o.url === 'string' &&
+        o.url !== '',
+    )
+    .map((o) => o.url as string);
+  if (urls.length > 0) return { urls, lock: undefined };
+  if (outputs.some((o) => o.restricted === true)) return { urls, lock: 'restricted' };
+  if (outputs.some((o) => o.blocked === true)) return { urls, lock: 'blocked' };
+  if (outputs.some((o) => o.pending === true) || isRatingPending(snapshot)) {
+    return { urls, lock: 'rating-pending' };
+  }
+  return { urls, lock: undefined };
 }
 
 /**

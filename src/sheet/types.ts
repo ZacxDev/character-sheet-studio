@@ -411,6 +411,19 @@ export function defaultPanelSpecs(): PanelSpec[] {
   ];
 }
 
+/**
+ * Why a finished panel has no image to show. `restricted`: above the viewer's
+ * content settings / the paying pool. `blocked`: moderation. `rating-pending`:
+ * the rating never landed inside the poll window — re-polled on the next open.
+ */
+export type PanelLock = 'restricted' | 'blocked' | 'rating-pending';
+
+const PANEL_LOCKS: ReadonlySet<string> = new Set<PanelLock>(['restricted', 'blocked', 'rating-pending']);
+
+export function isPanelLock(v: unknown): v is PanelLock {
+  return typeof v === 'string' && PANEL_LOCKS.has(v);
+}
+
 export interface SheetPanel extends PanelSpec {
   id: string;
   /** Per-panel seed: sheet seed + panel index offset (locked) or random (varied). */
@@ -435,6 +448,12 @@ export interface SheetPanel extends PanelSpec {
   /** The Buzz total quoted at confirm for this panel (display only). */
   cost?: number;
   outputs: string[];
+  /**
+   * Set on a `done` panel with no image: why the host returned none. Shown as a
+   * locked tile instead of "No image yet". `rating-pending` panels (and done
+   * panels with no image and no lock) are re-polled when the sheet opens.
+   */
+  locked?: PanelLock;
   /** App-owned failure code, never raw server prose. */
   errorCode?: string;
   /** Set after a successful Publish — the panel shows a persistent marker. */
@@ -479,6 +498,7 @@ function normalizeSheetPanel(v: unknown): SheetPanel | null {
     ...(startedAt ? { startedAt } : {}),
     ...(cost !== undefined ? { cost } : {}),
     outputs: asStringArray(v.outputs),
+    ...(isPanelLock(v.locked) ? { locked: v.locked } : {}),
     ...(errorCode ? { errorCode } : {}),
     ...(v.published === true ? { published: true } : {}),
     ...(v.posted === true ? { posted: true } : {}),
