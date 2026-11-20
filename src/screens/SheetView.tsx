@@ -1055,6 +1055,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       // readable result (old workflows read as failed), or publishing it
       // produced no image.
       let unreadable = 0;
+      let unpublished = 0;
       for (const p of cur.panels) {
         if (p.status !== 'done' || !p.workflowId || p.outputs.length === 0) continue;
         let imageId = p.publishedImageId;
@@ -1068,7 +1069,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
           const ids = await publish({ workflowId: p.workflowId, imageIndexes: [position], title: p.label });
           const first = ids[0];
           if (typeof first !== 'number') {
-            unreadable += 1;
+            unpublished += 1;
             continue;
           }
           imageId = first;
@@ -1080,7 +1081,9 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
         setShareNotice(
           unreadable > 0
             ? 'These panels can’t be shared: Civitai no longer has their results. Regenerate a panel to share it.'
-            : 'Nothing to share yet. Finish at least one panel first.',
+            : unpublished > 0
+              ? 'These panels couldn’t be published, so there is nothing to share. Try again later.'
+              : 'Nothing to share yet. Finish at least one panel first.',
         );
         return;
       }
@@ -1093,8 +1096,8 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       if (key !== cur.shareKey) await updateSheet((s) => ({ ...s, shareKey: key }));
       setShareNotice(
         `Shared ${entries.length} panel${entries.length === 1 ? '' : 's'}. Press Copy link to send it.` +
-          (unreadable > 0
-            ? ` ${unreadable} panel${unreadable === 1 ? '' : 's'} couldn’t be shared: Civitai no longer has their results.`
+          (unreadable + unpublished > 0
+            ? ` ${unreadable + unpublished} panel${unreadable + unpublished === 1 ? '' : 's'} couldn’t be shared.`
             : ''),
       );
     } catch {
@@ -1120,7 +1123,9 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
     try {
       await deleteSharedSheet(docs, cur.shareKey);
       await updateSheet((s) => ({ ...s, shareKey: undefined }));
-      setShareNotice('Stopped sharing. The link no longer opens this sheet.');
+      setShareNotice(
+        'Stopped sharing. The link no longer opens this sheet. Images you published stay on Civitai.',
+      );
     } catch {
       setShareNotice('Couldn’t stop sharing. The link still works; try again.');
     } finally {

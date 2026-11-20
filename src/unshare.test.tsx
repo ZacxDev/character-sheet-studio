@@ -8,7 +8,7 @@
 // The store is the SDK fake over the committed manifest (test-setup).
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import type { BlockWorkflowSnapshot } from '@civitai/app-sdk/blocks';
 
@@ -155,22 +155,43 @@ describe('0.3.3 share edges', () => {
     fireEvent.click(await screen.findByTestId('se-unshare-sheet', {}, { timeout: 8000 }));
 
     await waitFor(async () => expect(await recordAt(key)).toBeNull(), { timeout: 8000 });
-    await waitFor(() => expect(saved.at(-1)?.shareKey).toBeUndefined());
+    // The key is gone from the SAVED sheet, not just from the screen.
+    await waitFor(() => expect(saved.length).toBeGreaterThan(0));
+    expect('shareKey' in saved.at(-1)!).toBe(false);
     expect(screen.queryByTestId('se-copy-link')).toBeNull();
     expect(screen.getByTestId('se-share-notice')).toHaveTextContent(
-      'Stopped sharing. The link no longer opens this sheet.',
+      'Stopped sharing. The link no longer opens this sheet. Images you published stay on Civitai.',
     );
-  }, 20000);
 
-  it('an unshared link shows the not-available state to another viewer, with no images', async () => {
-    const key = await sharedRecord();
-    await testDocStore().storage.collection('shared_sheets').delete(key);
+    // The stopped link, opened by another viewer: not available, no images.
+    cleanup();
     render(<SharedSheetView shareKey={key} onGallery={() => {}} />);
     expect(await screen.findByTestId('ss-unavailable', {}, { timeout: 8000 })).toHaveTextContent(
       'This shared sheet isn’t available any more.',
     );
     expect(screen.queryByRole('img')).toBeNull();
-  }, 15000);
+  }, 25000);
+
+  it('a share record that cannot be removed keeps the sheet (no orphaned link)', async () => {
+    uninstall = installMockMoneyHost({ consentGranted: true });
+    // Another author's record: this viewer's delete is refused (write: own).
+    const theirs = await testDocStore()
+      .as({ viewer: { username: 'someone-else' } })
+      .storage.collection('shared_sheets')
+      .create(RECORD);
+    const deleted: string[] = [];
+    renderSheet(sheetWith({ shareKey: theirs.key }), [], deleted);
+
+    fireEvent.click(await screen.findByTestId('se-sheet-menu', {}, { timeout: 8000 }));
+    fireEvent.click(await screen.findByTestId('se-sheet-delete'));
+    fireEvent.click(await screen.findByTestId('se-sheet-delete-confirm'));
+
+    expect(
+      await screen.findByText('Couldn’t remove this sheet’s share link, so the sheet was kept. Try again.', {}, { timeout: 8000 }),
+    ).toBeInTheDocument();
+    expect(deleted).toEqual([]);
+    expect(await recordAt(theirs.key)).not.toBeNull();
+  }, 20000);
 
   it('deleting a shared sheet deletes its shared record too', async () => {
     uninstall = installMockMoneyHost({ consentGranted: true });
