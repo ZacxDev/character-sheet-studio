@@ -86,6 +86,14 @@ export interface CharactersProps {
   onCreateCancelled?: () => void;
 }
 
+/** Names the sheets whose share links a failed character delete already stopped. */
+function stoppedNote(names: string[]): string {
+  const quoted = names.map((n) => `“${n}”`).join(', ');
+  return names.length === 1
+    ? `The share link for ${quoted} was already stopped; share it again from that sheet if you want it public.`
+    : `The share links for ${quoted} were already stopped; share them again from each sheet if you want them public.`;
+}
+
 function seedPolicyLabel(p: SeedPolicy): string {
   return p === 'locked' ? 'Locked (reproducible)' : 'Varied (random per panel)';
 }
@@ -329,6 +337,15 @@ export function Characters({
     try {
       const shared = library.sheets.filter((s) => s.characterId === id && s.shareKey);
       let refused = false;
+      // Sheets whose record is gone, so their link no longer works. A failure
+      // after this point leaves them stopped, so the error has to say so.
+      // Sharing one again mints a new link (saveSharedSheet), even if its save
+      // below failed: on screen the key is already gone (saveSheet updates the
+      // library before it stores), and the stored copy still holds the dead
+      // key, which an Update shared sheet after a reload replaces. The names
+      // cover this attempt only: a sheet a previous attempt stopped has no key
+      // on screen any more, so it is not in `shared` and not named here.
+      const stopped: string[] = [];
       for (const sheet of shared) {
         try {
           if (!docs) throw new Error('no storage client');
@@ -337,15 +354,26 @@ export function Characters({
           refused = true;
           continue;
         }
+        stopped.push(sheet.name);
         const { shareKey: _stopped, ...rest } = sheet;
         if (await library.saveSheet({ ...rest, updatedAt: new Date().toISOString() })) refused = true;
       }
       if (refused) {
-        setDeleteError(`Couldn’t stop sharing ${name}’s sheets, so ${name} was kept. Try again.`);
+        setDeleteError(
+          stopped.length > 0
+            ? `Couldn’t finish stopping the share links for ${name}’s sheets, so ${name} was kept. ${stoppedNote(stopped)} Try again.`
+            : `Couldn’t stop sharing ${name}’s sheets, so ${name} was kept. Try again.`,
+        );
         return;
       }
       const err = await library.deleteCharacter(id);
-      if (err) setDeleteError(storeErrorMessage(err));
+      if (err) {
+        setDeleteError(
+          stopped.length > 0
+            ? `${name} wasn’t deleted. ${storeErrorMessage(err)} ${stoppedNote(stopped)}`
+            : storeErrorMessage(err),
+        );
+      }
     } finally {
       setDeletingId(null);
       releaseSheets(owned);
