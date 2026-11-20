@@ -152,11 +152,13 @@ describe('0.3.3 share edges', () => {
     const saved: SheetJob[] = [];
     renderSheet(sheetWith({ shareKey: key }), saved);
 
-    fireEvent.click(await screen.findByTestId('se-unshare-sheet', {}, { timeout: 8000 }));
+    const unshareBtn = await screen.findByTestId('se-unshare-sheet', {}, { timeout: 8000 });
+    const savesBefore = saved.length;
+    fireEvent.click(unshareBtn);
 
     await waitFor(async () => expect(await recordAt(key)).toBeNull(), { timeout: 8000 });
     // The key is gone from the SAVED sheet, not just from the screen.
-    await waitFor(() => expect(saved.length).toBeGreaterThan(0));
+    await waitFor(() => expect(saved.length).toBeGreaterThan(savesBefore));
     expect('shareKey' in saved.at(-1)!).toBe(false);
     expect(screen.queryByTestId('se-copy-link')).toBeNull();
     expect(screen.getByTestId('se-share-notice')).toHaveTextContent(

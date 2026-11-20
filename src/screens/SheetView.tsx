@@ -1122,7 +1122,10 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
     setSharing(true);
     try {
       await deleteSharedSheet(docs, cur.shareKey);
-      await updateSheet((s) => ({ ...s, shareKey: undefined }));
+      await updateSheet((s) => {
+        const { shareKey: _stopped, ...rest } = s;
+        return rest;
+      });
       setShareNotice(
         'Stopped sharing. The link no longer opens this sheet. Images you published stay on Civitai.',
       );
