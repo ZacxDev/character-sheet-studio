@@ -447,8 +447,10 @@ debit). Note this can be **blue** even when you paid: a gen covered mostly by
 free/earned Buzz reports `blue`. It's informational only.
 
 `accountType` / `spentAccountType` / `useBuzzBalance` require
-`@civitai/app-sdk@^0.51.0` + `@civitai/blocks-react@^0.58.0` (already pinned in
-`package.json`).
+`@civitai/app-sdk@^0.51.0` + `@civitai/blocks-react@^0.58.0`. This app pins
+`@civitai/app-sdk@^0.91.0` + `@civitai/blocks-react@^0.85.0` in `package.json`,
+for the output unlock, the persisted generation source, the queue `eta` and the
+share link.
 
 ## Develop
 

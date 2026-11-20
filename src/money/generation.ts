@@ -89,10 +89,11 @@ export function isTerminalStatus(status: BlockWorkflowSnapshot['status']): boole
 }
 
 /**
- * One entry of a snapshot's `outputs` (host civitai#8994+). Mirrors
- * `BlockWorkflowOutput` from @civitai/app-sdk >= 0.89, declared here because
- * the bundled SDK (0.51) predates it. blocks-react's inbound validator is a
- * pass-through predicate, so the host's extra fields reach the app as sent.
+ * One entry of a snapshot's `outputs` (host civitai#8994+), read loosely.
+ * @civitai/app-sdk 0.91 types it as `BlockWorkflowOutput`; this looser shape
+ * predates that and stays because the readers below also accept an unknown
+ * `reason`. blocks-react 0.85's inbound validator replaces a malformed entry in
+ * place with `{ restricted: true, reason: 'ceiling' }`, so positions never move.
  * Exactly one shape per entry: an available `{ url }`, `{ restricted, reason }`
  * (`reason`: `unrated` | `ceiling` | `pool` | `blocked`, civitai#9328),
  * `{ pending }` (not rated yet) or `{ blocked }` (moderation). Only the first

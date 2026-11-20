@@ -16,6 +16,8 @@ import {
   useBuzzWorkflow,
   useConsentUnavailable,
   useCreatePostFromApp,
+  useOutputUnlock,
+  usePersistGenerationSource,
   usePublishGenerationOutputs,
   useRequestConsent,
   useRequestSignIn,
@@ -62,6 +64,15 @@ import {
   resumablePanels,
   type PanelErrorCode,
 } from '../sheet/batch.js';
+import {
+  etaText,
+  isUnlockableLock,
+  outputPosition,
+  panelEta,
+  unlockAction,
+  unlockLabel,
+  type PanelEta,
+} from '../sheet/panel-actions.js';
 import type { PanelLock, SheetJob, SheetPanel } from '../sheet/types.js';
 import { isTerminalPanelStatus } from '../sheet/types.js';
 import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
@@ -122,7 +133,7 @@ const LOCK_COPY: Record<PanelLock, { title: string; body: string }> = {
   // settings change that cannot help.
   pool: {
     title: 'Restricted',
-    body: 'Not available for this account’s content level.',
+    body: 'The Buzz that paid for this doesn’t cover mature content. You can unlock it with Yellow Buzz.',
   },
   restricted: {
     title: 'Restricted',
@@ -151,6 +162,8 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
   const { saveImage } = useSaveImage();
   const { publish } = usePublishGenerationOutputs();
   const { createPost } = useCreatePostFromApp();
+  const { unlockOutput } = useOutputUnlock();
+  const { persist } = usePersistGenerationSource();
 
   const anon = ready && !viewer;
   const granted = hasBudgetedScope(token?.scopes);
@@ -186,6 +199,25 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
   const [exporting, setExporting] = useState<string | null>(null);
   const [exportFlash, setExportFlash] = useState<string | null>(null);
   const [publishing, setPublishing] = useState<string | null>(null);
+  // Unlock / use-as-reference in flight (panel id), and the last per-panel
+  // outcome line for either.
+  const [unlocking, setUnlocking] = useState<string | null>(null);
+  const [referencing, setReferencing] = useState<string | null>(null);
+  const [panelNotice, setPanelNotice] = useState<{ panelId: string; text: string } | null>(null);
+  // Live queue / progress per generating panel, from each poll's `eta`. Not
+  // persisted: it is only meaningful while the poll loop runs.
+  const [etaByPanel, setEtaByPanel] = useState<Record<string, PanelEta>>({});
+  const setPanelEta = useCallback((panelId: string, eta: PanelEta | null | undefined) => {
+    setEtaByPanel((cur) => {
+      if (eta === undefined) return cur;
+      if (eta === null) {
+        if (!(panelId in cur)) return cur;
+        const { [panelId]: _gone, ...rest } = cur;
+        return rest;
+      }
+      return { ...cur, [panelId]: eta };
+    });
+  }, []);
   // A priced-but-not-yet-submitted panel action: the viewer sees the exact
   // cost and confirms before any Buzz moves (the batch flow's rule, applied
   // to single panels). `next` is the prepared panel state (new seed for
@@ -334,6 +366,9 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
           // `final`, not the status: a `succeeded` snapshot still being rated
           // (image withheld, `ratingPending`) keeps the panel running.
           const patch = final ? panelPatchForFinal(snap) : null;
+          // An absent eta keeps the last line (the SDK's rule); a final
+          // snapshot clears it.
+          setPanelEta(panelId, final ? null : panelEta(snap) ?? undefined);
           if (patch) {
             stopPanelLoop(panelId);
             void setPanel(panelId, (p) => ({
@@ -370,7 +405,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       });
       pollLoopsRef.current.set(panelId, cancelLoop);
     },
-    [failPanel, setPanel, stopPanelLoop],
+    [failPanel, setPanel, setPanelEta, stopPanelLoop],
   );
   const startPanelLoopRef = useRef(startPanelLoop);
   startPanelLoopRef.current = startPanelLoop;
@@ -879,6 +914,88 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
     [publish],
   );
 
+  // --- unlock / use as reference --------------------------------------------------
+  // Both name an output by its POSITION in the workflow's `outputs`, so each
+  // reads the workflow first rather than trusting a stored index.
+
+  const unlockPanel = useCallback(
+    async (panel: SheetPanel) => {
+      if (!panel.workflowId) return;
+      const workflowId = panel.workflowId;
+      setUnlocking(panel.id);
+      setPanelNotice(null);
+      const applySnapshot = async (snap: BlockWorkflowSnapshot) => {
+        const patch = panelPatchForFinal(snap);
+        if (!patch) return false;
+        await setPanel(panel.id, (p) =>
+          p.workflowId === workflowId ? { ...p, outputs: patch.outputs, locked: patch.locked } : p,
+        );
+        return patch.outputs.length > 0;
+      };
+      try {
+        const snap = await pollRef.current(workflowId);
+        const position = outputPosition(snap, 'restricted');
+        if (position === null) {
+          // Nothing is restricted any more: show what the host returns now.
+          await applySnapshot(snap);
+          return;
+        }
+        const action = unlockAction(await unlockOutput(workflowId, position));
+        if (action.kind === 'apply') {
+          await applySnapshot(action.snapshot);
+        } else if (action.kind === 'repoll') {
+          await applySnapshot(await pollRef.current(workflowId));
+        } else if (action.kind === 'notice') {
+          setPanelNotice({ panelId: panel.id, text: action.text });
+        }
+      } catch {
+        setPanelNotice({ panelId: panel.id, text: 'Couldn’t reach Civitai to unlock it. Try again.' });
+      } finally {
+        setUnlocking(null);
+      }
+    },
+    [setPanel, unlockOutput],
+  );
+
+  const setPanelAsReference = useCallback(
+    async (panel: SheetPanel) => {
+      const cur = sheetRef.current;
+      const character = cur ? library.characters.find((c) => c.id === cur.characterId) : undefined;
+      if (!panel.workflowId || !character) return;
+      setReferencing(panel.id);
+      setPanelNotice(null);
+      try {
+        const snap = await pollRef.current(panel.workflowId);
+        const imageIndex = outputPosition(snap, 'available');
+        if (imageIndex === null) {
+          setPanelNotice({ panelId: panel.id, text: 'This panel has no image to use yet.' });
+          return;
+        }
+        const src = await persist({ workflowId: panel.workflowId, imageIndex });
+        const saveErr = await library.saveCharacter({
+          ...character,
+          referenceImage: { url: src.url, width: src.width, height: src.height },
+          updatedAt: new Date().toISOString(),
+        });
+        if (saveErr) {
+          setError(storeErrorMessage(saveErr));
+          return;
+        }
+        setPanelNotice({
+          panelId: panel.id,
+          text: src.ready
+            ? `Now ${character.name}’s reference portrait.`
+            : `Now ${character.name}’s reference portrait. It is still being checked, so a sheet that uses it may need a minute before it can run.`,
+        });
+      } catch {
+        setPanelNotice({ panelId: panel.id, text: 'Couldn’t save this panel as the reference. Try again.' });
+      } finally {
+        setReferencing(null);
+      }
+    },
+    [library, persist],
+  );
+
   // --- post to profile -----------------------------------------------------------
   // Publishes a real, feed-visible Civitai post from this app's own workflow
   // outputs (the host re-derives the images server-side; the per-call host
@@ -1333,10 +1450,46 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
                       justifyContent: 'center',
                     }}
                   >
-                    <span style={{ fontSize: 13, color: 'var(--civitai-color-text-dimmed)' }}>
-                      Generating…{elapsed ? ` ${elapsed}` : ''}
-                      {panel.cost != null ? ` · ≈${formatCost(panel.cost)} Buzz` : ''}
-                    </span>
+                    <Stack gap={6} align="center" style={{ width: '80%' }}>
+                      <span style={{ fontSize: 13, color: 'var(--civitai-color-text-dimmed)' }}>
+                        Generating…{elapsed ? ` ${elapsed}` : ''}
+                        {panel.cost != null ? ` · ≈${formatCost(panel.cost)} Buzz` : ''}
+                      </span>
+                      {etaByPanel[panel.id] && (
+                        <>
+                          <span
+                            data-testid="se-panel-eta"
+                            style={{ fontSize: 12, color: 'var(--civitai-color-text-dimmed)' }}
+                          >
+                            {etaText(etaByPanel[panel.id]!)}
+                          </span>
+                          {etaByPanel[panel.id]!.progress !== null && (
+                            <div
+                              role="progressbar"
+                              aria-label={`${panel.label} progress`}
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={Math.round(etaByPanel[panel.id]!.progress! * 100)}
+                              style={{
+                                width: '100%',
+                                height: 4,
+                                borderRadius: 2,
+                                background: 'var(--civitai-color-surface-3, rgba(127,127,127,0.25))',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: `${Math.round(etaByPanel[panel.id]!.progress! * 100)}%`,
+                                  height: '100%',
+                                  borderRadius: 2,
+                                  background: 'var(--civitai-color-primary, #228be6)',
+                                }}
+                              />
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </Stack>
                   </div>
                 ) : panel.status === 'done' && panel.locked ? (
                   <div
@@ -1361,6 +1514,18 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
                   >
                     <strong>{LOCK_COPY[panel.locked].title}</strong>
                     <span>{LOCK_COPY[panel.locked].body}</span>
+                    {isUnlockableLock(panel.locked) && panel.workflowId && (
+                      <Button
+                        size="sm"
+                        variant="light"
+                        loading={unlocking === panel.id}
+                        disabled={unlocking !== null}
+                        onClick={() => void unlockPanel(panel)}
+                        data-testid="se-panel-unlock"
+                      >
+                        {unlockLabel(panel.locked)}
+                      </Button>
+                    )}
                   </div>
                 ) : (
                   <div
@@ -1377,6 +1542,12 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
                   >
                     No image yet
                   </div>
+                )}
+
+                {panelNotice?.panelId === panel.id && (
+                  <Alert color="info" data-testid="se-panel-notice">
+                    <span style={{ fontSize: 13 }}>{panelNotice.text}</span>
+                  </Alert>
                 )}
 
                 {errCopy && (
@@ -1524,6 +1695,23 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
                               shares it to your profile instead
                             </span>
                           </Group>
+                          {panel.outputs.length > 0 && character && (
+                            <Group gap="xs" align="center" wrap>
+                              <Button
+                                size="sm"
+                                variant="subtle"
+                                loading={referencing === panel.id}
+                                disabled={!panel.workflowId || referencing !== null}
+                                onClick={() => void setPanelAsReference(panel)}
+                                data-testid="se-panel-use-reference"
+                              >
+                                Use as reference
+                              </Button>
+                              <span style={{ fontSize: 12, opacity: 0.65 }}>
+                                Make this panel {character.name}’s reference portrait. It stays private.
+                              </span>
+                            </Group>
+                          )}
                         </>
                       )}
                       <Group gap="xs" align="center" wrap>
