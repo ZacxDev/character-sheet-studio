@@ -86,6 +86,9 @@ describe('unlockAction', () => {
   });
 });
 
+// A fixed locale and zone: the readout follows the viewer's, which CI's is not.
+const UTC_24H = { locale: 'en-GB', timeZone: 'UTC' };
+
 describe('panelEta', () => {
   it('reads snapshot.eta while queued', () => {
     const eta = panelEta(
@@ -108,7 +111,7 @@ describe('panelEta', () => {
       completesAt: '2026-11-19T14:06:30.000Z',
       noCapacity: false,
     });
-    expect(etaText(eta!, 'UTC')).toBe('4 ahead in queue · starts ~14:05 · done ~14:06');
+    expect(etaText(eta!, UTC_24H)).toBe('4 ahead in queue · starts ~14:05 · done ~14:06');
   });
 
   it('falls back to a step queue (precedingJobs / estimatedStartAt / estimatedCompleteAt)', () => {
@@ -138,7 +141,7 @@ describe('panelEta', () => {
       completesAt: null,
       noCapacity: true,
     });
-    expect(etaText(eta!, 'UTC')).toBe('Waiting for a free worker · Next in queue · starts ~09:41');
+    expect(etaText(eta!, UTC_24H)).toBe('Waiting for a free worker · Next in queue · starts ~09:41');
   });
 
   it('falls back to a running step progress, clamped to 0..1', () => {

@@ -152,22 +152,32 @@ function clamp01(n: number): number {
   return Math.min(1, Math.max(0, n));
 }
 
-/** "HH:MM" in the viewer's locale, or null for a missing / unparseable time. */
-function clock(iso: string | null, timeZone?: string): string | null {
+/** Formatting seam for tests: the viewer's locale and zone by default. */
+export interface ClockFormat {
+  locale?: string;
+  timeZone?: string;
+}
+
+/** The time in the viewer's locale (hours and minutes), or null for a missing / unparseable time. */
+function clock(iso: string | null, fmt: ClockFormat = {}): string | null {
   if (!iso) return null;
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return null;
-  return new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', ...(timeZone ? { timeZone } : {}) });
+  return new Date(t).toLocaleTimeString(fmt.locale ? [fmt.locale] : [], {
+    hour: '2-digit',
+    minute: '2-digit',
+    ...(fmt.timeZone ? { timeZone: fmt.timeZone } : {}),
+  });
 }
 
 /** One line of text for a {@link PanelEta}: progress, or queue position and times. */
-export function etaText(eta: PanelEta, timeZone?: string): string {
+export function etaText(eta: PanelEta, fmt: ClockFormat = {}): string {
   if (eta.progress !== null) return `${Math.round(eta.progress * 100)}% done`;
   const parts: string[] = [];
   if (eta.noCapacity) parts.push('Waiting for a free worker');
   if (eta.ahead !== null) parts.push(eta.ahead === 0 ? 'Next in queue' : `${eta.ahead} ahead in queue`);
-  const starts = clock(eta.startsAt, timeZone);
-  const done = clock(eta.completesAt, timeZone);
+  const starts = clock(eta.startsAt, fmt);
+  const done = clock(eta.completesAt, fmt);
   if (starts) parts.push(`starts ~${starts}`);
   if (done) parts.push(`done ~${done}`);
   return parts.length > 0 ? parts.join(' · ') : 'Queued';

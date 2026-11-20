@@ -267,7 +267,9 @@ describe('Sheet View: restricted copy and unrated recovery', () => {
     const saved: SheetJob[] = [];
     renderSheet(sheetWith([panel({ workflowId: 'wf-a', status: 'running' })]), saved);
     const tile = await screen.findByTestId('se-panel-locked', {}, { timeout: 8000 });
-    expect(tile).toHaveTextContent('Not available for this account’s content level.');
+    expect(tile).toHaveTextContent(
+      'The Buzz that paid for this doesn’t cover mature content. You can unlock it with Yellow Buzz.',
+    );
     expect(tile).not.toHaveTextContent(/settings/i);
     expect(lastPanel(saved)).toMatchObject({ locked: 'pool' });
   }, 15000);
