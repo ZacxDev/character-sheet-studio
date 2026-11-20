@@ -328,3 +328,26 @@ describe('enhance/post persistence fields', () => {
     expect(normalizeSheetJob(rawJob)?.postUrl).toBeUndefined();
   });
 });
+
+describe('reference portrait scan flag (civitai#9189)', () => {
+  const base = { id: 'c1', name: 'Mira' };
+  const ref = { url: 'https://image.example.test/p.jpeg', width: 640, height: 960 };
+
+  it('a saved ready flag survives a reload, false and true alike', () => {
+    expect(normalizeCharacter({ ...base, referenceImage: { ...ref, ready: false } })?.referenceImage).toEqual({
+      ...ref,
+      ready: false,
+    });
+    expect(normalizeCharacter({ ...base, referenceImage: { ...ref, ready: true } })?.referenceImage).toEqual({
+      ...ref,
+      ready: true,
+    });
+  });
+
+  it('an absent or non-boolean ready is left out, and nothing else rides along', () => {
+    expect(normalizeCharacter({ ...base, referenceImage: ref })?.referenceImage).toEqual(ref);
+    expect(
+      normalizeCharacter({ ...base, referenceImage: { ...ref, ready: 'no', imageId: 9 } })?.referenceImage,
+    ).toEqual(ref);
+  });
+});
