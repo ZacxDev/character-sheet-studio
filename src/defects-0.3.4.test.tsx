@@ -415,6 +415,90 @@ describe('0.3.4 defects', () => {
     expect(await shared().get(theirs.key)).not.toBeNull();
   }, 20000);
 
+  // 0.3.5: the links are stopped before the character is deleted. When the
+  // delete then fails, or only some links could be stopped, the error names
+  // the sheets whose links are already stopped and says they can be re-shared.
+
+  async function deleteKaida(lib: SheetLibrary) {
+    const user = userEvent.setup();
+    render(<Characters library={lib} onBuildSheet={() => {}} onViewSheets={() => {}} />);
+    await user.click(screen.getByTestId('char-menu'));
+    await user.click(screen.getByTestId('char-menu-delete'));
+    await user.click(await screen.findByTestId('char-confirm-delete'));
+  }
+
+  it('2 (0.3.5): a failed final delete names the sheets whose links were already stopped', async () => {
+    uninstall = installMockMoneyHost({ consentGranted: true });
+    const a = await shared().create(RECORD);
+    const b = await shared().create(RECORD);
+    const spy = newSpy();
+    const sheets = [
+      sheetWith({ id: 'sheet-1', name: 'Front set', shareKey: a.key }),
+      sheetWith({ id: 'sheet-2', name: 'Pose set', shareKey: b.key }),
+      sheetWith({ id: 'sheet-3', name: 'Never shared' }),
+    ];
+    await deleteKaida(stubLibrary(spy, { sheets, deleteCharacter: async () => 'request-failed' }));
+
+    expect(
+      await screen.findByText(
+        'Kaida wasn’t deleted. Saving failed — the connection dropped. Your changes are still on screen; try again. ' +
+          'The share links for “Front set”, “Pose set” were already stopped; share them again from each sheet if you want them public.',
+        {},
+        { timeout: 8000 },
+      ),
+    ).toBeInTheDocument();
+    expect(await shared().get(a.key)).toBeNull();
+    expect(await shared().get(b.key)).toBeNull();
+  }, 20000);
+
+  it('2 (0.3.5): a partial unshare failure names only the sheet whose link was stopped', async () => {
+    uninstall = installMockMoneyHost({ consentGranted: true });
+    // The first sheet's record is another author's, so its delete is refused;
+    // the second sheet's link is stopped.
+    const theirs = await testDocStore()
+      .as({ viewer: { username: 'someone-else' } })
+      .storage.collection('shared_sheets')
+      .create(RECORD);
+    const mine = await shared().create(RECORD);
+    const spy = newSpy();
+    const sheets = [
+      sheetWith({ id: 'sheet-1', name: 'Front set', shareKey: theirs.key }),
+      sheetWith({ id: 'sheet-2', name: 'Pose set', shareKey: mine.key }),
+    ];
+    await deleteKaida(stubLibrary(spy, { sheets }));
+
+    expect(
+      await screen.findByText(
+        'Couldn’t finish stopping the share links for Kaida’s sheets, so Kaida was kept. ' +
+          'The share link for “Pose set” was already stopped; share it again from that sheet if you want it public. Try again.',
+        {},
+        { timeout: 8000 },
+      ),
+    ).toBeInTheDocument();
+    expect(spy.deletedChars).toEqual([]);
+    expect(await shared().get(mine.key)).toBeNull();
+    expect(await shared().get(theirs.key)).not.toBeNull();
+  }, 20000);
+
+  it('2 (0.3.5): a sheet whose link stopped but whose save failed is named as stopped', async () => {
+    uninstall = installMockMoneyHost({ consentGranted: true });
+    const rec = await shared().create(RECORD);
+    const spy = newSpy();
+    const sheets = [sheetWith({ id: 'sheet-1', name: 'Front set', shareKey: rec.key })];
+    await deleteKaida(stubLibrary(spy, { sheets, saveSheet: async () => 'request-failed' }));
+
+    expect(
+      await screen.findByText(
+        'Couldn’t finish stopping the share links for Kaida’s sheets, so Kaida was kept. ' +
+          'The share link for “Front set” was already stopped; share it again from that sheet if you want it public. Try again.',
+        {},
+        { timeout: 8000 },
+      ),
+    ).toBeInTheDocument();
+    expect(spy.deletedChars).toEqual([]);
+    expect(await shared().get(rec.key)).toBeNull();
+  }, 20000);
+
   it('2: a character with no shared sheets keeps the old confirm copy', async () => {
     uninstall = installMockMoneyHost({ consentGranted: true });
     const spy = newSpy();
