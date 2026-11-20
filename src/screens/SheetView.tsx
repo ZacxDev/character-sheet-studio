@@ -16,10 +16,13 @@ import {
   useBuzzWorkflow,
   useConsentUnavailable,
   useCreatePostFromApp,
+  useOutputUnlock,
+  usePersistGenerationSource,
   usePublishGenerationOutputs,
   useRequestConsent,
   useRequestSignIn,
   useSaveImage,
+  useShareLink,
 } from '@civitai/blocks-react';
 import {
   Alert,
@@ -44,7 +47,14 @@ import {
   isSettledSnapshot,
 } from '../money/generation.js';
 import { startPollLoop } from '../money/pollLoop.js';
+import { sharedSheetRoute } from '../platform/route.js';
 import { buildSheetPanelBody } from '../sheet/body.js';
+import { useDocumentStorage } from '../sheet/doc-storage.js';
+import {
+  buildSharedSheetDoc,
+  saveSharedSheet,
+  STORAGE_PUBLISH_SCOPE,
+} from '../sheet/shared-sheet.js';
 import {
   createPostErrorCopy,
   hasPostsScope,
@@ -62,6 +72,15 @@ import {
   resumablePanels,
   type PanelErrorCode,
 } from '../sheet/batch.js';
+import {
+  etaText,
+  isUnlockableLock,
+  outputPosition,
+  panelEta,
+  unlockAction,
+  unlockLabel,
+  type PanelEta,
+} from '../sheet/panel-actions.js';
 import type { PanelLock, SheetJob, SheetPanel } from '../sheet/types.js';
 import { isTerminalPanelStatus } from '../sheet/types.js';
 import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
@@ -122,7 +141,7 @@ const LOCK_COPY: Record<PanelLock, { title: string; body: string }> = {
   // settings change that cannot help.
   pool: {
     title: 'Restricted',
-    body: 'Not available for this account’s content level.',
+    body: 'The Buzz that paid for this doesn’t cover mature content. You can unlock it with Yellow Buzz.',
   },
   restricted: {
     title: 'Restricted',
@@ -151,6 +170,10 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
   const { saveImage } = useSaveImage();
   const { publish } = usePublishGenerationOutputs();
   const { createPost } = useCreatePostFromApp();
+  const { unlockOutput } = useOutputUnlock();
+  const { persist } = usePersistGenerationSource();
+  const { share: shareLink, lastResult: shareResult, error: shareError } = useShareLink();
+  const docs = useDocumentStorage();
 
   const anon = ready && !viewer;
   const granted = hasBudgetedScope(token?.scopes);
@@ -186,6 +209,28 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
   const [exporting, setExporting] = useState<string | null>(null);
   const [exportFlash, setExportFlash] = useState<string | null>(null);
   const [publishing, setPublishing] = useState<string | null>(null);
+  // Unlock / use-as-reference in flight (panel id), and the last per-panel
+  // outcome line for either.
+  const [unlocking, setUnlocking] = useState<string | null>(null);
+  const [referencing, setReferencing] = useState<string | null>(null);
+  const [panelNotice, setPanelNotice] = useState<{ panelId: string; text: string } | null>(null);
+  // Share sheet: in flight, and the last outcome line.
+  const [sharing, setSharing] = useState(false);
+  const [shareNotice, setShareNotice] = useState<string | null>(null);
+  // Live queue / progress per generating panel, from each poll's `eta`. Not
+  // persisted: it is only meaningful while the poll loop runs.
+  const [etaByPanel, setEtaByPanel] = useState<Record<string, PanelEta>>({});
+  const setPanelEta = useCallback((panelId: string, eta: PanelEta | null | undefined) => {
+    setEtaByPanel((cur) => {
+      if (eta === undefined) return cur;
+      if (eta === null) {
+        if (!(panelId in cur)) return cur;
+        const { [panelId]: _gone, ...rest } = cur;
+        return rest;
+      }
+      return { ...cur, [panelId]: eta };
+    });
+  }, []);
   // A priced-but-not-yet-submitted panel action: the viewer sees the exact
   // cost and confirms before any Buzz moves (the batch flow's rule, applied
   // to single panels). `next` is the prepared panel state (new seed for
@@ -334,6 +379,9 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
           // `final`, not the status: a `succeeded` snapshot still being rated
           // (image withheld, `ratingPending`) keeps the panel running.
           const patch = final ? panelPatchForFinal(snap) : null;
+          // An absent eta keeps the last line (the SDK's rule); a final
+          // snapshot clears it.
+          setPanelEta(panelId, final ? null : panelEta(snap) ?? undefined);
           if (patch) {
             stopPanelLoop(panelId);
             void setPanel(panelId, (p) => ({
@@ -370,7 +418,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       });
       pollLoopsRef.current.set(panelId, cancelLoop);
     },
-    [failPanel, setPanel, stopPanelLoop],
+    [failPanel, setPanel, setPanelEta, stopPanelLoop],
   );
   const startPanelLoopRef = useRef(startPanelLoop);
   startPanelLoopRef.current = startPanelLoop;
@@ -551,6 +599,9 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
         locked: undefined,
         repair: undefined,
         errorCode: undefined,
+        // A new image replaces the published one: Share must publish it again.
+        published: undefined,
+        publishedImageId: undefined,
       };
       const body = buildSheetPanelBody(next, character, stack, library.settings, {
         account: cur.account,
@@ -624,6 +675,8 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
           locked: undefined,
           repair: undefined,
           errorCode: undefined,
+          published: undefined,
+          publishedImageId: undefined,
         };
         const body = buildSheetPanelBody(next, character, stack, library.settings, {
           account: cur.account,
@@ -867,9 +920,15 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       if (!panel.workflowId) return;
       setPublishing(panel.id);
       try {
-        await publish({ workflowId: panel.workflowId, imageIndexes: [0], title: panel.label });
+        const ids = await publish({ workflowId: panel.workflowId, imageIndexes: [0], title: panel.label });
         // Persistent marker (survives reload) so Publish never looks unclicked.
-        await setPanel(panel.id, (p) => ({ ...p, published: true }));
+        // The image ID lets Share sheet reuse this publish.
+        const imageId = ids[0];
+        await setPanel(panel.id, (p) => ({
+          ...p,
+          published: true,
+          ...(typeof imageId === 'number' ? { publishedImageId: imageId } : {}),
+        }));
       } catch {
         setError('Publish failed — the host refused (or you dismissed the confirm).');
       } finally {
@@ -878,6 +937,152 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
     },
     [publish],
   );
+
+  // --- unlock / use as reference --------------------------------------------------
+  // Both name an output by its POSITION in the workflow's `outputs`, so each
+  // reads the workflow first rather than trusting a stored index.
+
+  const unlockPanel = useCallback(
+    async (panel: SheetPanel) => {
+      if (!panel.workflowId) return;
+      const workflowId = panel.workflowId;
+      setUnlocking(panel.id);
+      setPanelNotice(null);
+      const applySnapshot = async (snap: BlockWorkflowSnapshot) => {
+        const patch = panelPatchForFinal(snap);
+        if (!patch) return false;
+        await setPanel(panel.id, (p) =>
+          p.workflowId === workflowId ? { ...p, outputs: patch.outputs, locked: patch.locked } : p,
+        );
+        return patch.outputs.length > 0;
+      };
+      try {
+        const snap = await pollRef.current(workflowId);
+        const position = outputPosition(snap, 'restricted');
+        if (position === null) {
+          // Nothing is restricted any more: show what the host returns now.
+          await applySnapshot(snap);
+          return;
+        }
+        const action = unlockAction(await unlockOutput(workflowId, position));
+        if (action.kind === 'apply') {
+          await applySnapshot(action.snapshot);
+        } else if (action.kind === 'repoll') {
+          await applySnapshot(await pollRef.current(workflowId));
+        } else if (action.kind === 'notice') {
+          setPanelNotice({ panelId: panel.id, text: action.text });
+        }
+      } catch {
+        setPanelNotice({ panelId: panel.id, text: 'Couldn’t reach Civitai to unlock it. Try again.' });
+      } finally {
+        setUnlocking(null);
+      }
+    },
+    [setPanel, unlockOutput],
+  );
+
+  const setPanelAsReference = useCallback(
+    async (panel: SheetPanel) => {
+      const cur = sheetRef.current;
+      const character = cur ? library.characters.find((c) => c.id === cur.characterId) : undefined;
+      if (!panel.workflowId || !character) return;
+      setReferencing(panel.id);
+      setPanelNotice(null);
+      try {
+        const snap = await pollRef.current(panel.workflowId);
+        const imageIndex = outputPosition(snap, 'available');
+        if (imageIndex === null) {
+          setPanelNotice({ panelId: panel.id, text: 'This panel has no image to use yet.' });
+          return;
+        }
+        const src = await persist({ workflowId: panel.workflowId, imageIndex });
+        const saveErr = await library.saveCharacter({
+          ...character,
+          referenceImage: { url: src.url, width: src.width, height: src.height },
+          updatedAt: new Date().toISOString(),
+        });
+        if (saveErr) {
+          setError(storeErrorMessage(saveErr));
+          return;
+        }
+        setPanelNotice({
+          panelId: panel.id,
+          text: src.ready
+            ? `Now ${character.name}’s reference portrait.`
+            : `Now ${character.name}’s reference portrait. It is still being checked, so a sheet that uses it may need a minute before it can run.`,
+        });
+      } catch {
+        setPanelNotice({ panelId: panel.id, text: 'Couldn’t save this panel as the reference. Try again.' });
+      } finally {
+        setReferencing(null);
+      }
+    },
+    [library, persist],
+  );
+
+  // --- share sheet -------------------------------------------------------------------
+  // Publishes each finished panel not published yet (the host's confirm, one
+  // per panel), then writes the sheet's shared record of image IDs. The link is
+  // copied by a SEPARATE click (Copy link): the copy needs a fresh click, and
+  // the publish confirms in between would expire this one.
+
+  const publishGranted = (token?.scopes ?? []).includes(STORAGE_PUBLISH_SCOPE);
+
+  const shareSheet = useCallback(async () => {
+    const cur = sheetRef.current;
+    if (!cur || !docs) return;
+    setShareNotice(null);
+    if (anon) {
+      requestSignIn();
+      setShareNotice('Sign in to share a sheet.');
+      return;
+    }
+    if (!publishGranted) {
+      requestConsent({ scopes: [STORAGE_PUBLISH_SCOPE] });
+      setShareNotice('Approve sharing in the Civitai dialog, then press Share sheet again.');
+      return;
+    }
+    const owner = library.characters.find((c) => c.id === cur.characterId);
+    setSharing(true);
+    try {
+      const entries: { label: string; imageId: number }[] = [];
+      for (const p of cur.panels) {
+        if (p.status !== 'done' || !p.workflowId || p.outputs.length === 0) continue;
+        let imageId = p.publishedImageId;
+        if (imageId === undefined) {
+          const snap = await pollRef.current(p.workflowId);
+          const position = outputPosition(snap, 'available');
+          if (position === null) continue;
+          const ids = await publish({ workflowId: p.workflowId, imageIndexes: [position], title: p.label });
+          const first = ids[0];
+          if (typeof first !== 'number') continue;
+          imageId = first;
+          await setPanel(p.id, (x) => ({ ...x, published: true, publishedImageId: first }));
+        }
+        entries.push({ label: p.label, imageId });
+      }
+      if (entries.length === 0) {
+        setShareNotice('Nothing to share yet. Finish at least one panel first.');
+        return;
+      }
+      const doc = buildSharedSheetDoc({
+        characterName: owner?.name ?? 'Character',
+        sheetName: cur.name,
+        panels: entries,
+      });
+      const key = await saveSharedSheet(docs, doc, cur.shareKey);
+      if (key !== cur.shareKey) await updateSheet((s) => ({ ...s, shareKey: key }));
+      setShareNotice(
+        `Shared ${entries.length} panel${entries.length === 1 ? '' : 's'}. Press Copy link to send it.`,
+      );
+    } catch {
+      setShareNotice(
+        'Couldn’t share the sheet. If you closed a publish confirm, press Share sheet again; panels already published are kept.',
+      );
+    } finally {
+      setSharing(false);
+    }
+  }, [anon, docs, library.characters, publish, publishGranted, requestConsent, requestSignIn, setPanel, updateSheet]);
 
   // --- post to profile -----------------------------------------------------------
   // Publishes a real, feed-visible Civitai post from this app's own workflow
@@ -1153,7 +1358,53 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
             >
               Regenerate sheet
             </Button>
+            <Button
+              variant="light"
+              loading={sharing}
+              disabled={sharing || doneCount === 0}
+              data-testid="se-share-sheet"
+              onClick={() => void shareSheet()}
+            >
+              {sheet.shareKey ? 'Update shared sheet' : 'Share sheet'}
+            </Button>
+            {sheet.shareKey && (
+              <Button
+                variant="subtle"
+                data-testid="se-copy-link"
+                // Straight from the click, nothing awaited first: the host's
+                // clipboard write needs this click.
+                onClick={() => {
+                  shareLink({ subPath: sharedSheetRoute(sheet.shareKey!) }).catch(() => undefined);
+                }}
+              >
+                Copy link
+              </Button>
+            )}
           </Group>
+          {shareNotice && (
+            <span style={{ fontSize: 13 }} data-testid="se-share-notice">
+              {shareNotice}
+            </span>
+          )}
+          {shareResult?.copied && (
+            <span style={{ fontSize: 13 }} data-testid="se-link-copied">
+              Link copied.
+            </span>
+          )}
+          {shareResult && !shareResult.copied && shareResult.method === 'none' && (
+            <TextInput
+              readOnly
+              aria-label="Share link"
+              data-testid="se-share-url"
+              value={shareResult.url}
+              onFocus={(e) => e.currentTarget.select()}
+            />
+          )}
+          {shareError && (
+            <span role="alert" style={{ fontSize: 13 }}>
+              Couldn’t copy the link: {shareError.message}
+            </span>
+          )}
           {sheet.postUrl && (
             <Group gap="sm" align="center">
               <span style={{ fontSize: 13 }}>Posted ✓</span>
@@ -1333,10 +1584,46 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
                       justifyContent: 'center',
                     }}
                   >
-                    <span style={{ fontSize: 13, color: 'var(--civitai-color-text-dimmed)' }}>
-                      Generating…{elapsed ? ` ${elapsed}` : ''}
-                      {panel.cost != null ? ` · ≈${formatCost(panel.cost)} Buzz` : ''}
-                    </span>
+                    <Stack gap={6} align="center" style={{ width: '80%' }}>
+                      <span style={{ fontSize: 13, color: 'var(--civitai-color-text-dimmed)' }}>
+                        Generating…{elapsed ? ` ${elapsed}` : ''}
+                        {panel.cost != null ? ` · ≈${formatCost(panel.cost)} Buzz` : ''}
+                      </span>
+                      {etaByPanel[panel.id] && (
+                        <>
+                          <span
+                            data-testid="se-panel-eta"
+                            style={{ fontSize: 12, color: 'var(--civitai-color-text-dimmed)' }}
+                          >
+                            {etaText(etaByPanel[panel.id]!)}
+                          </span>
+                          {etaByPanel[panel.id]!.progress !== null && (
+                            <div
+                              role="progressbar"
+                              aria-label={`${panel.label} progress`}
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={Math.round(etaByPanel[panel.id]!.progress! * 100)}
+                              style={{
+                                width: '100%',
+                                height: 4,
+                                borderRadius: 2,
+                                background: 'var(--civitai-color-surface-3, rgba(127,127,127,0.25))',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: `${Math.round(etaByPanel[panel.id]!.progress! * 100)}%`,
+                                  height: '100%',
+                                  borderRadius: 2,
+                                  background: 'var(--civitai-color-primary, #228be6)',
+                                }}
+                              />
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </Stack>
                   </div>
                 ) : panel.status === 'done' && panel.locked ? (
                   <div
@@ -1361,6 +1648,18 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
                   >
                     <strong>{LOCK_COPY[panel.locked].title}</strong>
                     <span>{LOCK_COPY[panel.locked].body}</span>
+                    {isUnlockableLock(panel.locked) && panel.workflowId && (
+                      <Button
+                        size="sm"
+                        variant="light"
+                        loading={unlocking === panel.id}
+                        disabled={unlocking !== null}
+                        onClick={() => void unlockPanel(panel)}
+                        data-testid="se-panel-unlock"
+                      >
+                        {unlockLabel(panel.locked)}
+                      </Button>
+                    )}
                   </div>
                 ) : (
                   <div
@@ -1377,6 +1676,12 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
                   >
                     No image yet
                   </div>
+                )}
+
+                {panelNotice?.panelId === panel.id && (
+                  <Alert color="info" data-testid="se-panel-notice">
+                    <span style={{ fontSize: 13 }}>{panelNotice.text}</span>
+                  </Alert>
                 )}
 
                 {errCopy && (
@@ -1524,6 +1829,23 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
                               shares it to your profile instead
                             </span>
                           </Group>
+                          {panel.outputs.length > 0 && character && (
+                            <Group gap="xs" align="center" wrap>
+                              <Button
+                                size="sm"
+                                variant="subtle"
+                                loading={referencing === panel.id}
+                                disabled={!panel.workflowId || referencing !== null}
+                                onClick={() => void setPanelAsReference(panel)}
+                                data-testid="se-panel-use-reference"
+                              >
+                                Use as reference
+                              </Button>
+                              <span style={{ fontSize: 12, opacity: 0.65 }}>
+                                Make this panel {character.name}’s reference portrait. It stays private.
+                              </span>
+                            </Group>
+                          )}
                         </>
                       )}
                       <Group gap="xs" align="center" wrap>

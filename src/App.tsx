@@ -29,7 +29,9 @@ import { Breadcrumbs, type Crumb } from './screens/Breadcrumbs.js';
 import { Stacks } from './screens/Stacks.js';
 import { SheetBuilder } from './screens/SheetBuilder.js';
 import { SheetView } from './screens/SheetView.js';
+import { SharedSheetView } from './screens/SharedSheetView.js';
 import {
+  GALLERY_ROUTE,
   builderRoute,
   characterCreateRoute,
   characterEditRoute,
@@ -71,6 +73,7 @@ function navSectionForRoute(route: AppRoute): NavSection {
       return 'builder';
     case 'sheets':
     case 'sheet':
+    case 'shared-sheet':
       return 'sheets';
   }
 }
@@ -398,6 +401,13 @@ export function App() {
               />
             )}
 
+            {route.name === 'shared-sheet' && (
+              <SharedSheetView
+                key={route.shareKey}
+                shareKey={route.shareKey}
+                onGallery={() => navigateTo(GALLERY_ROUTE)}
+              />
+            )}
             {route.name === 'sheet' && (
               <SheetView
                 key={route.sheetId}

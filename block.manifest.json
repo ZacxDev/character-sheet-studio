@@ -1,7 +1,7 @@
 {
   "$schema": "https://civitai.com/schemas/app-block/v1.json",
   "blockId": "character-sheet-studio",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "name": "Character Sheet Studio",
   "tagline": "Build a full character sheet in one batch — front, side, back, expressions and poses, priced before you generate.",
   "description": "Character Sheet Studio turns one character into a complete model sheet. Define the character once (description, traits, trigger words, an optional reference portrait), pair them with a model + LoRA stack, then generate the panels a sheet needs — front, side, back, three-quarter, expressions, poses, details — as one batch. Every run is priced in Buzz before anything is submitted, sheets resume if you leave mid-run, and any finished panel can be posted straight to your Civitai profile. Characters, stacks, and sheets persist in your private library.",
@@ -10,16 +10,69 @@
   "scopes": [
     "ai:write:budgeted",
     "apps:storage",
+    "apps:storage:publish",
     "posts:write:self"
   ],
   "scopeJustifications": {
     "ai:write:budgeted": "Runs image generations on the user's behalf, spending from the per-generation Buzz budget the page grants.",
     "apps:storage": "Saves and loads the viewer's own characters, model stacks, sheets and settings in a private collection that only that viewer can read.",
+    "apps:storage:publish": "Lets a viewer share one of their sheets by link: tapping Share writes a small shared record with the character name, the sheet name and the IDs of the panels they chose to publish (each publish goes through the host's own confirm). The record holds image IDs only, never image URLs, so anyone who opens the link sees each image at their own content level.",
     "posts:write:self": "Publishes a Civitai post to the viewer's own profile from images they generated in this app, only when they tap Post and approve the host's per-post confirmation."
   },
   "storage": {
     "collections": {
-      "kv": { "visibility": "private" }
+      "kv": {
+        "visibility": "private"
+      },
+      "shared_sheets": {
+        "visibility": "shared",
+        "write": "own",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "v",
+            "characterName",
+            "sheetName",
+            "panels"
+          ],
+          "properties": {
+            "v": {
+              "const": 1
+            },
+            "characterName": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "sheetName": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "panels": {
+              "type": "array",
+              "maxItems": 24,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "label",
+                  "imageId"
+                ],
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "imageId": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "page": {
