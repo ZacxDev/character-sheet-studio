@@ -16,6 +16,6 @@ jobs:
       id-token: write  # let the action request a GitHub OIDC token
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: civitai/app-submit-action@dadb59d7223a314990b2b583e4b29e1a2fe56b35 # v1.0.1
+      - uses: civitai/app-submit-action@259cdc5a966776a3882e968c466fa9affaccde0f # v1.0.2
         with:
           api-key: ${{ secrets.CIVITAI_API_KEY }}
