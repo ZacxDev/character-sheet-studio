@@ -81,11 +81,43 @@ function asInt(v: unknown): number | null {
 
 // --- Character ---------------------------------------------------------------
 
-/** Civitai-hosted reference portrait, from `useImageUpload({ purpose: 'generationSource' })`. */
+/**
+ * Civitai-hosted reference portrait, from `useImageUpload({ purpose:
+ * 'generationSource' })` or `usePersistGenerationSource()`.
+ *
+ * `ready` is the host's scan flag as it was when the portrait was added
+ * (civitai#9189): `false` means Civitai was still checking it, so a generation
+ * that uses it is refused (`source-scan-pending`) until the check finishes.
+ * Absent when the host did not report it (the rule off, an older host). A run
+ * the host accepts with the portrait proves the check finished, and the Sheet
+ * Builder then saves `ready: true`. Never part of a workflow body: see
+ * {@link sourceImageOf}.
+ */
 export interface CharacterRefImage {
   url: string;
   width: number;
   height: number;
+  ready?: boolean;
+}
+
+/** What the host returned for a generation source, as the character keeps it. */
+export function refImageFromSource(src: {
+  url: string;
+  width: number;
+  height: number;
+  ready?: unknown;
+}): CharacterRefImage {
+  return {
+    url: src.url,
+    width: src.width,
+    height: src.height,
+    ...(typeof src.ready === 'boolean' ? { ready: src.ready } : {}),
+  };
+}
+
+/** The `sourceImages` entry for a portrait: url, width and height only. */
+export function sourceImageOf(ref: CharacterRefImage): { url: string; width: number; height: number } {
+  return { url: ref.url, width: ref.width, height: ref.height };
 }
 
 export type SeedPolicy = 'locked' | 'varied';
@@ -123,7 +155,7 @@ function normalizeRefImage(v: unknown): CharacterRefImage | undefined {
   const width = asInt(v.width);
   const height = asInt(v.height);
   if (url === null || width === null || height === null) return undefined;
-  return { url, width, height };
+  return refImageFromSource({ url, width, height, ready: v.ready });
 }
 
 /** Returns `null` for anything that is not a salvageable Character. */

@@ -45,11 +45,13 @@ import {
   formatCost,
   hasBudgetedScope,
   isSettledSnapshot,
+  isThrottledSnapshot,
 } from '../money/generation.js';
 import { startPollLoop } from '../money/pollLoop.js';
 import { sharedSheetRoute } from '../platform/route.js';
 import { buildSheetPanelBody } from '../sheet/body.js';
 import { useDocumentStorage } from '../sheet/doc-storage.js';
+import { claimSheets, releaseSheets, useBusySheets } from '../sheet/share-flight.js';
 import {
   buildSharedSheetDoc,
   deleteSharedSheet,
@@ -83,7 +85,7 @@ import {
   type PanelEta,
 } from '../sheet/panel-actions.js';
 import type { PanelLock, SheetJob, SheetPanel } from '../sheet/types.js';
-import { isTerminalPanelStatus } from '../sheet/types.js';
+import { isTerminalPanelStatus, refImageFromSource } from '../sheet/types.js';
 import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
 import { storeErrorMessage } from './common.js';
 
@@ -125,6 +127,9 @@ const STATUS_COLOR: Record<SheetPanel['status'], string> = {
   failed: 'error',
   canceled: 'warning',
 };
+
+/** A one-shot workflow read the host answered with a throttled reply. */
+const BUSY_PANEL = 'Civitai is busy right now. Try again in a moment.';
 
 const STILL_CHECKING = {
   title: 'Still being checked',
@@ -215,8 +220,15 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
   const [unlocking, setUnlocking] = useState<string | null>(null);
   const [referencing, setReferencing] = useState<string | null>(null);
   const [panelNotice, setPanelNotice] = useState<{ panelId: string; text: string } | null>(null);
-  // Share sheet: in flight, and the last outcome line.
+  // Share sheet: in flight (this screen's spinner), and the last outcome line.
+  // Share / Stop sharing / Delete exclude each other per sheet through
+  // `claimSheets` (sheet/share-flight.ts), which outlives this screen: a share
+  // keeps running after Back, and a delete started under it would let the late
+  // share save a live link for a deleted sheet. `opBusy` disables the buttons
+  // while ANY of those runs, here or from an earlier visit.
   const [sharing, setSharing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const opBusy = useBusySheets().has(sheetId);
   const [shareNotice, setShareNotice] = useState<string | null>(null);
   // Live queue / progress per generating panel, from each poll's `eta`. Not
   // persisted: it is only meaningful while the poll loop runs.
@@ -959,6 +971,11 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       };
       try {
         const snap = await pollRef.current(workflowId);
+        if (isThrottledSnapshot(snap)) {
+          // Not a read: the lock stays as it was.
+          setPanelNotice({ panelId: panel.id, text: BUSY_PANEL });
+          return;
+        }
         const position = outputPosition(snap, 'restricted');
         if (position === null) {
           // Nothing is restricted any more: show what the host returns now.
@@ -969,7 +986,9 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
         if (action.kind === 'apply') {
           await applySnapshot(action.snapshot);
         } else if (action.kind === 'repoll') {
-          await applySnapshot(await pollRef.current(workflowId));
+          const again = await pollRef.current(workflowId);
+          if (isThrottledSnapshot(again)) setPanelNotice({ panelId: panel.id, text: BUSY_PANEL });
+          else await applySnapshot(again);
         } else if (action.kind === 'notice') {
           setPanelNotice({ panelId: panel.id, text: action.text });
         }
@@ -991,6 +1010,10 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       setPanelNotice(null);
       try {
         const snap = await pollRef.current(panel.workflowId);
+        if (isThrottledSnapshot(snap)) {
+          setPanelNotice({ panelId: panel.id, text: BUSY_PANEL });
+          return;
+        }
         const imageIndex = outputPosition(snap, 'available');
         if (imageIndex === null) {
           setPanelNotice({ panelId: panel.id, text: 'This panel has no image to use yet.' });
@@ -999,7 +1022,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
         const src = await persist({ workflowId: panel.workflowId, imageIndex });
         const saveErr = await library.saveCharacter({
           ...character,
-          referenceImage: { url: src.url, width: src.width, height: src.height },
+          referenceImage: refImageFromSource(src),
           updatedAt: new Date().toISOString(),
         });
         if (saveErr) {
@@ -1047,6 +1070,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       setShareNotice('Approve sharing in the Civitai dialog, then press Share sheet again.');
       return;
     }
+    if (!claimSheets([cur.id])) return;
     const owner = library.characters.find((c) => c.id === cur.characterId);
     setSharing(true);
     try {
@@ -1061,6 +1085,16 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
         let imageId = p.publishedImageId;
         if (imageId === undefined) {
           const snap = await pollRef.current(p.workflowId);
+          if (isThrottledSnapshot(snap)) {
+            // Not a read of the panel. Skipping it would drop it from the live
+            // record on an update, so nothing is written this time.
+            setShareNotice(
+              cur.shareKey
+                ? 'Civitai is busy right now, so the shared sheet wasn’t updated. The link still shows the last version. Press Update shared sheet again in a moment.'
+                : 'Civitai is busy right now, so the sheet wasn’t shared. Panels already published are kept. Press Share sheet again in a moment.',
+            );
+            return;
+          }
           const position = outputPosition(snap, 'available');
           if (position === null) {
             unreadable += 1;
@@ -1106,6 +1140,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       );
     } finally {
       setSharing(false);
+      releaseSheets([cur.id]);
     }
   }, [anon, docs, library.characters, publish, publishGranted, requestConsent, requestSignIn, setPanel, updateSheet]);
 
@@ -1119,6 +1154,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       setShareNotice('Sharing isn’t available right now. Reload the app and try again.');
       return;
     }
+    if (!claimSheets([cur.id])) return;
     setSharing(true);
     try {
       await deleteSharedSheet(docs, cur.shareKey);
@@ -1133,6 +1169,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       setShareNotice('Couldn’t stop sharing. The link still works; try again.');
     } finally {
       setSharing(false);
+      releaseSheets([cur.id]);
     }
   }, [docs, updateSheet]);
 
@@ -1273,24 +1310,32 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
   }, [nameDraft, updateSheet]);
 
   const deleteSheet = useCallback(async () => {
-    // A shared sheet's record goes first: deleting the sheet alone would leave
-    // a live link nobody can stop any more. If that fails, keep the sheet.
-    const key = sheetRef.current?.shareKey;
-    if (key) {
-      try {
-        if (!docs) throw new Error('no storage client');
-        await deleteSharedSheet(docs, key);
-      } catch {
-        setError('Couldn’t remove this sheet’s share link, so the sheet was kept. Try again.');
+    // Never while a share or Stop sharing runs (see `sharing`).
+    if (!claimSheets([sheetId])) return;
+    setDeleting(true);
+    try {
+      // A shared sheet's record goes first: deleting the sheet alone would leave
+      // a live link nobody can stop any more. If that fails, keep the sheet.
+      const key = sheetRef.current?.shareKey;
+      if (key) {
+        try {
+          if (!docs) throw new Error('no storage client');
+          await deleteSharedSheet(docs, key);
+        } catch {
+          setError('Couldn’t remove this sheet’s share link, so the sheet was kept. Try again.');
+          setConfirmDelete(false);
+          return;
+        }
+      }
+      const err = await library.deleteSheet(sheetId);
+      if (err) {
+        setError(storeErrorMessage(err));
         setConfirmDelete(false);
         return;
       }
-    }
-    const err = await library.deleteSheet(sheetId);
-    if (err) {
-      setError(storeErrorMessage(err));
-      setConfirmDelete(false);
-      return;
+    } finally {
+      setDeleting(false);
+      releaseSheets([sheetId]);
     }
     onBack();
   }, [docs, library, onBack, sheetId]);
@@ -1393,6 +1438,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
                       role="menuitem"
                       style={{ color: 'var(--civitai-color-error, #f87171)' }}
                       data-testid="se-sheet-delete"
+                      disabled={opBusy}
                       onClick={() => {
                         setMenuOpen(false);
                         setConfirmDelete(true);
@@ -1426,7 +1472,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
             <Button
               variant="light"
               loading={sharing}
-              disabled={sharing || doneCount === 0}
+              disabled={opBusy || doneCount === 0}
               data-testid="se-share-sheet"
               onClick={() => void shareSheet()}
             >
@@ -1450,7 +1496,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
                 variant="subtle"
                 color="error"
                 loading={sharing}
-                disabled={sharing}
+                disabled={opBusy}
                 data-testid="se-unshare-sheet"
                 onClick={() => void unshareSheet()}
               >
@@ -1511,6 +1557,8 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
                 size="sm"
                 color="error"
                 data-testid="se-sheet-delete-confirm"
+                loading={deleting}
+                disabled={opBusy}
                 onClick={() => void deleteSheet()}
               >
                 Confirm delete

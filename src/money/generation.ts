@@ -89,6 +89,17 @@ export function isTerminalStatus(status: BlockWorkflowSnapshot['status']): boole
 }
 
 /**
+ * The host's answer to a poll it could not serve (`throttled: true`, carried
+ * with `status: 'processing'` and no outputs). It is NOT an observation of the
+ * workflow: the SDK keeps its previous result, and so must every caller. A
+ * one-shot read that gets one says Civitai is busy and changes nothing; it never
+ * reads the missing outputs as "no image".
+ */
+export function isThrottledSnapshot(snapshot: BlockWorkflowSnapshot): boolean {
+  return (snapshot as { throttled?: unknown }).throttled === true;
+}
+
+/**
  * One entry of a snapshot's `outputs` (host civitai#8994+), read loosely.
  * @civitai/app-sdk 0.91 types it as `BlockWorkflowOutput`; this looser shape
  * predates that and stays because the readers below also accept an unknown
