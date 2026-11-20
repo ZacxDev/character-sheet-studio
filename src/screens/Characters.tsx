@@ -37,6 +37,7 @@ import {
 import { startPollLoop } from '../money/pollLoop.js';
 import { idempotencyKeyFor } from '../sheet/batch.js';
 import { useDocumentStorage } from '../sheet/doc-storage.js';
+import { claimSheets, releaseSheets, useBusySheets } from '../sheet/share-flight.js';
 import { deleteSharedSheet } from '../sheet/shared-sheet.js';
 import {
   buildCharacterPromptEnhanceBody,
@@ -262,6 +263,7 @@ export function Characters({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const docs = useDocumentStorage();
+  const busySheets = useBusySheets();
   // Bumped to remount (reset) the inline empty-state create form on Cancel.
   const [inlineNonce, setInlineNonce] = useState(0);
 
@@ -309,10 +311,19 @@ export function Characters({
   // The character's sheets stay (labeled "Unknown character"), but their share
   // links stop first: a link that names a deleted character is not something
   // the viewer chose to keep public. Each stopped record's key is cleared from
-  // its sheet; if any record can't be removed, the character is kept so the
-  // viewer can retry (each sheet still has its own Stop sharing).
+  // its sheet; if any record can't be removed, or a sheet can't be saved
+  // without its key, the character is kept so the viewer can retry (each sheet
+  // still has its own Stop sharing). Every one of the character's sheets is
+  // claimed first (sheet/share-flight.ts): a share still running on one of
+  // them, even from a Sheet View the viewer has left, would otherwise save a
+  // live link after this stopped the others.
   const doDelete = async (id: string) => {
-    if (deletingId !== null) return;
+    const name = library.characters.find((c) => c.id === id)?.name ?? 'this character';
+    const owned = library.sheets.filter((s) => s.characterId === id).map((s) => s.id);
+    if (!claimSheets(owned)) {
+      setDeleteError(`One of ${name}’s sheets is still being shared or deleted. Try again when it finishes.`);
+      return;
+    }
     setConfirmDeleteId(null);
     setDeletingId(id);
     try {
@@ -327,10 +338,9 @@ export function Characters({
           continue;
         }
         const { shareKey: _stopped, ...rest } = sheet;
-        await library.saveSheet({ ...rest, updatedAt: new Date().toISOString() });
+        if (await library.saveSheet({ ...rest, updatedAt: new Date().toISOString() })) refused = true;
       }
       if (refused) {
-        const name = library.characters.find((c) => c.id === id)?.name ?? 'this character';
         setDeleteError(`Couldn’t stop sharing ${name}’s sheets, so ${name} was kept. Try again.`);
         return;
       }
@@ -338,6 +348,7 @@ export function Characters({
       if (err) setDeleteError(storeErrorMessage(err));
     } finally {
       setDeletingId(null);
+      releaseSheets(owned);
     }
   };
 
@@ -536,7 +547,10 @@ export function Characters({
                       color="red"
                       onClick={() => void doDelete(c.id)}
                       loading={deletingId === c.id}
-                      disabled={deletingId !== null}
+                      disabled={
+                        deletingId !== null ||
+                        library.sheets.some((s) => s.characterId === c.id && busySheets.has(s.id))
+                      }
                       data-testid="char-confirm-delete"
                     >
                       Confirm delete

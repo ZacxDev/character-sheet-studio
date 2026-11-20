@@ -51,6 +51,7 @@ import { startPollLoop } from '../money/pollLoop.js';
 import { sharedSheetRoute } from '../platform/route.js';
 import { buildSheetPanelBody } from '../sheet/body.js';
 import { useDocumentStorage } from '../sheet/doc-storage.js';
+import { claimSheets, releaseSheets, useBusySheets } from '../sheet/share-flight.js';
 import {
   buildSharedSheetDoc,
   deleteSharedSheet,
@@ -219,24 +220,15 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
   const [unlocking, setUnlocking] = useState<string | null>(null);
   const [referencing, setReferencing] = useState<string | null>(null);
   const [panelNotice, setPanelNotice] = useState<{ panelId: string; text: string } | null>(null);
-  // Share sheet: in flight, and the last outcome line. Share / Stop sharing and
-  // Delete exclude each other: a share that finishes after the sheet was
-  // deleted would save it back with a live link, and a delete during Stop
-  // sharing races its record delete. The refs are the synchronous guard (a
-  // click in the same tick still sees the old state); the states disable the
-  // buttons.
-  const [sharing, setSharingState] = useState(false);
-  const sharingRef = useRef(false);
-  const setSharing = useCallback((v: boolean) => {
-    sharingRef.current = v;
-    setSharingState(v);
-  }, []);
-  const [deleting, setDeletingState] = useState(false);
-  const deletingRef = useRef(false);
-  const setDeleting = useCallback((v: boolean) => {
-    deletingRef.current = v;
-    setDeletingState(v);
-  }, []);
+  // Share sheet: in flight (this screen's spinner), and the last outcome line.
+  // Share / Stop sharing / Delete exclude each other per sheet through
+  // `claimSheets` (sheet/share-flight.ts), which outlives this screen: a share
+  // keeps running after Back, and a delete started under it would let the late
+  // share save a live link for a deleted sheet. `opBusy` disables the buttons
+  // while ANY of those runs, here or from an earlier visit.
+  const [sharing, setSharing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const opBusy = useBusySheets().has(sheetId);
   const [shareNotice, setShareNotice] = useState<string | null>(null);
   // Live queue / progress per generating panel, from each poll's `eta`. Not
   // persisted: it is only meaningful while the poll loop runs.
@@ -1078,7 +1070,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       setShareNotice('Approve sharing in the Civitai dialog, then press Share sheet again.');
       return;
     }
-    if (sharingRef.current || deletingRef.current) return;
+    if (!claimSheets([cur.id])) return;
     const owner = library.characters.find((c) => c.id === cur.characterId);
     setSharing(true);
     try {
@@ -1148,20 +1140,21 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       );
     } finally {
       setSharing(false);
+      releaseSheets([cur.id]);
     }
-  }, [anon, docs, library.characters, publish, publishGranted, requestConsent, requestSignIn, setPanel, setSharing, updateSheet]);
+  }, [anon, docs, library.characters, publish, publishGranted, requestConsent, requestSignIn, setPanel, updateSheet]);
 
   // Stop sharing: delete the shared record so the link stops opening the sheet
   // for anyone, then forget the key. The published images stay on Civitai.
   const unshareSheet = useCallback(async () => {
     const cur = sheetRef.current;
     if (!cur?.shareKey) return;
-    if (sharingRef.current || deletingRef.current) return;
     setShareNotice(null);
     if (!docs) {
       setShareNotice('Sharing isn’t available right now. Reload the app and try again.');
       return;
     }
+    if (!claimSheets([cur.id])) return;
     setSharing(true);
     try {
       await deleteSharedSheet(docs, cur.shareKey);
@@ -1176,8 +1169,9 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       setShareNotice('Couldn’t stop sharing. The link still works; try again.');
     } finally {
       setSharing(false);
+      releaseSheets([cur.id]);
     }
-  }, [docs, setSharing, updateSheet]);
+  }, [docs, updateSheet]);
 
   // --- post to profile -----------------------------------------------------------
   // Publishes a real, feed-visible Civitai post from this app's own workflow
@@ -1317,7 +1311,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
 
   const deleteSheet = useCallback(async () => {
     // Never while a share or Stop sharing runs (see `sharing`).
-    if (sharingRef.current || deletingRef.current) return;
+    if (!claimSheets([sheetId])) return;
     setDeleting(true);
     try {
       // A shared sheet's record goes first: deleting the sheet alone would leave
@@ -1341,9 +1335,10 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       }
     } finally {
       setDeleting(false);
+      releaseSheets([sheetId]);
     }
     onBack();
-  }, [docs, library, onBack, setDeleting, sheetId]);
+  }, [docs, library, onBack, sheetId]);
 
   // --- render ----------------------------------------------------------------------
 
@@ -1443,7 +1438,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
                       role="menuitem"
                       style={{ color: 'var(--civitai-color-error, #f87171)' }}
                       data-testid="se-sheet-delete"
-                      disabled={sharing || deleting}
+                      disabled={opBusy}
                       onClick={() => {
                         setMenuOpen(false);
                         setConfirmDelete(true);
@@ -1477,7 +1472,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
             <Button
               variant="light"
               loading={sharing}
-              disabled={sharing || deleting || doneCount === 0}
+              disabled={opBusy || doneCount === 0}
               data-testid="se-share-sheet"
               onClick={() => void shareSheet()}
             >
@@ -1501,7 +1496,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
                 variant="subtle"
                 color="error"
                 loading={sharing}
-                disabled={sharing || deleting}
+                disabled={opBusy}
                 data-testid="se-unshare-sheet"
                 onClick={() => void unshareSheet()}
               >
@@ -1563,7 +1558,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
                 color="error"
                 data-testid="se-sheet-delete-confirm"
                 loading={deleting}
-                disabled={sharing || deleting}
+                disabled={opBusy}
                 onClick={() => void deleteSheet()}
               >
                 Confirm delete

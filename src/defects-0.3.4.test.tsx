@@ -276,6 +276,83 @@ describe('0.3.4 defects', () => {
     expect(screen.getByTestId('se-sheet-delete-confirm')).toBeEnabled();
   }, 20000);
 
+  it('1: a delete in flight disables Share, and the share does not run', async () => {
+    uninstall = installMockMoneyHost({ consentGranted: true });
+    host.replies.set('wf-a', [SUCCEEDED('wf-a')]);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const spy = newSpy();
+    const sheet = sheetWith({});
+    render(
+      <SheetView
+        library={stubLibrary(spy, {
+          sheets: [sheet],
+          deleteSheet: async (id) => {
+            await gate;
+            spy.deletedSheets.push(id);
+            return null;
+          },
+        })}
+        sheetId={sheet.id}
+        onBack={() => {}}
+        onNewSheet={() => {}}
+        onRegenerateSheet={() => {}}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId('se-sheet-menu', {}, { timeout: 8000 }));
+    fireEvent.click(await screen.findByTestId('se-sheet-delete'));
+    fireEvent.click(await screen.findByTestId('se-sheet-delete-confirm'));
+    await waitFor(() => expect(screen.getByTestId('se-share-sheet')).toBeDisabled());
+    fireEvent.click(screen.getByTestId('se-share-sheet'));
+
+    release();
+    await waitFor(() => expect(spy.deletedSheets).toEqual(['sheet-1']), { timeout: 8000 });
+    expect(host.publishCalls).toEqual([]);
+    expect(host.pollCalls).toEqual([]);
+  }, 20000);
+
+  it('1: a share still running after Back holds off both deletes until it finishes', async () => {
+    uninstall = installMockMoneyHost({ consentGranted: true });
+    host.replies.set('wf-a', [SUCCEEDED('wf-a')]);
+    let release!: () => void;
+    host.publishGate = new Promise<void>((r) => {
+      release = r;
+    });
+    const spy = newSpy();
+    const sheet = sheetWith({});
+    const view = renderSheet(sheet, spy);
+    fireEvent.click(await screen.findByTestId('se-share-sheet', {}, { timeout: 8000 }));
+    await waitFor(() => expect(host.publishCalls).toHaveLength(1), { timeout: 8000 });
+    // Back: the Sheet View goes away, the share keeps running.
+    view.unmount();
+
+    // The sheet opened again: Delete is disabled.
+    const again = renderSheet(sheet, spy);
+    fireEvent.click(await screen.findByTestId('se-sheet-menu', {}, { timeout: 8000 }));
+    expect(await screen.findByTestId('se-sheet-delete')).toBeDisabled();
+    again.unmount();
+
+    // Deleting the character: Confirm delete is disabled and deletes nothing.
+    const user = userEvent.setup();
+    render(
+      <Characters library={stubLibrary(spy, { sheets: [sheet] })} onBuildSheet={() => {}} onViewSheets={() => {}} />,
+    );
+    await user.click(screen.getByTestId('char-menu'));
+    await user.click(screen.getByTestId('char-menu-delete'));
+    const confirm = await screen.findByTestId('char-confirm-delete');
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(spy.deletedChars).toEqual([]);
+
+    // The share finishes: the character can be deleted, and it stops the new link.
+    release();
+    await waitFor(() => expect(spy.savedSheets.some((s) => s.shareKey)).toBe(true), { timeout: 8000 });
+    await waitFor(() => expect(screen.getByTestId('char-confirm-delete')).toBeEnabled());
+  }, 25000);
+
   // --- 2. character delete stops sharing its sheets ---------------------------------
 
   it('2: deleting a character stops sharing its sheets and the confirm says so', async () => {
@@ -521,5 +598,45 @@ describe('0.3.4 defects', () => {
     for (const b of bodies) {
       expect((b as { sourceImages?: unknown }).sourceImages).toEqual([{ url: REF_URL, width: 640, height: 960 }]);
     }
+  }, 30000);
+
+  it('5: a run the host refuses keeps the portrait pending', async () => {
+    let submits = 0;
+    uninstall = installMockMoneyHost({
+      consentGranted: true,
+      generation: { failSubmitException: true, failSubmitExceptionMessage: 'source-scan-pending' },
+      onOutbound: (msg) => {
+        if (msg.type === 'SUBMIT_WORKFLOW') submits += 1;
+      },
+    });
+    const spy = newSpy();
+    const pending: Character = {
+      ...char,
+      referenceImage: { url: REF_URL, width: 640, height: 960, ready: false },
+    };
+    const user = userEvent.setup();
+    render(
+      <SheetBuilder
+        library={stubLibrary(spy, { characters: [pending] })}
+        preselectedCharacterId="char-1"
+        onOpenSheet={() => {}}
+        onCreateStack={() => {}}
+        onCreateCharacter={() => {}}
+      />,
+    );
+    await screen.findByTestId('builder-stack-card');
+    await user.click(screen.getByTestId('builder-step-tab-2'));
+    await screen.findByRole('button', { name: /^Generate \d+ panels/ }, { timeout: 8000 });
+    await user.click(screen.getByTestId('se-confirm-back'));
+    await user.click(await screen.findByRole('checkbox', { name: 'Use reference portrait as img2img source' }));
+    const generate = await screen.findByRole('button', { name: /^Generate (\d+) panels/ }, { timeout: 8000 });
+    const panels = Number(/Generate (\d+) panels/.exec(generate.textContent ?? '')?.[1]);
+    await user.click(generate);
+
+    // Every panel was submitted and refused; the final sheet save has run.
+    await waitFor(() => expect(spy.savedSheets.at(-1)?.status).toBe('failed'), { timeout: 10000 });
+    expect(submits).toBe(panels);
+    expect(spy.savedSheets.at(-1)?.panels.every((p) => !p.workflowId)).toBe(true);
+    expect(spy.savedChars).toEqual([]);
   }, 30000);
 });
