@@ -24,6 +24,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # PROBE ONLY (throwaway branch, never merged): run the two new test files
+      # against the PRE-CHANGE app first, so the red is the tests', not tsc's.
+      - run: npx vitest run src/sdk-features.test.tsx src/share-link.test.tsx
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
