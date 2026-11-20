@@ -3,21 +3,22 @@
 // The page host owns the browser history: it seeds the route in BLOCK_INIT
 // (`PageSlotContext.subPath`), pushes `ROUTE_CHANGED` whenever that route moves
 // (including the viewer's Android/browser Back), and performs the shallow push
-// when the app asks to navigate. The installed SDK exposes the outbound
-// navigation hook but not a route hook, so this module reads the init snapshot
-// and subscribes to the push through the same transport the SDK hooks use.
+// when the app asks to navigate. @civitai/blocks-react 0.85 applies each
+// `ROUTE_CHANGED` to the transport snapshot's `context.subPath` and does NOT
+// pass it to handlers registered by name. The interception arrived in 0.61.0
+// (with useCivitaiRoute); 0.58.1, which 0.2.x bundled, handed an unknown push
+// type to its by-name handlers, which is what this module listened to until
+// 0.3.2. So the host's route is read from the
+// snapshot, on every change the transport emits.
 //
-// The route returned here is also updated optimistically by `navigateTo`: the
-// mock host deliberately has no route control, so waiting for its echo would
-// leave the local harness (and tests) unable to move between pages. A later
-// host push always wins, because it is the history's actual position.
+// The route returned here is also updated optimistically by `navigateTo`, so the
+// view moves without waiting for the host's echo. A later host MOVE always wins,
+// because it is the history's actual position; a transport emit that leaves the
+// host's route unchanged (a token refresh, a theme change) does not.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { getTransport, useCivitaiNavigate } from '@civitai/blocks-react';
-import type { ParentToBlockMessageType } from '@civitai/app-sdk/blocks';
-
-export const ROUTE_CHANGED = 'ROUTE_CHANGED';
 
 export type AppRoute =
   | { name: 'characters' }
@@ -217,12 +218,6 @@ function subPathFromSnapshot(): string | null {
     : null;
 }
 
-function subPathFromRouteChanged(payload: unknown): string | null {
-  if (!payload || typeof payload !== 'object') return null;
-  const subPath = (payload as { subPath?: unknown }).subPath;
-  return typeof subPath === 'string' ? normalizeRoutePath(subPath) : null;
-}
-
 export interface AppRouteController {
   /** Current sub-path below the app root; `''` is the app index. */
   subPath: string;
@@ -271,49 +266,54 @@ export function useAppRoute(): AppRouteController {
       runEffect(effect);
     };
 
-    const syncInitRoute = () => {
-      // The snapshot's context forever carries the INIT sub-path. It may seed
-      // the route only before any explicit navigation or host push has set it;
-      // after that it would resurrect the landing page over the current one.
+    // The host's route, as the transport holds it. @civitai/blocks-react 0.85
+    // CONSUMES a host ROUTE_CHANGED into the snapshot (`context.subPath`) and
+    // emits; it no longer reaches a handler registered by name. So the host's
+    // moves are read here as changes of the snapshot's sub-path, which covers
+    // the init value, the viewer's Back / Forward and the acks of our own
+    // navigations alike.
+    let hostSubPath: string | null = null;
+
+    const onHostRoute = (next: string) => {
+      const cur = seedRef.current;
+      if (cur && cur.phase !== 'done') {
+        const step = seedRouteChanged(cur, next);
+        seedRef.current = step.state;
+        if (step.state.phase !== 'replacing') stopResend();
+        runEffect(step.effect);
+        if (!step.render) return;
+      }
+      applyRoute(next);
+    };
+
+    const syncHostRoute = () => {
+      const next = subPathFromSnapshot();
+      if (next === null || next === hostSubPath) return;
+      const first = hostSubPath === null;
+      hostSubPath = next;
+      if (!first) {
+        onHostRoute(next);
+        return;
+      }
+      // The INIT sub-path seeds the route only before any explicit navigation
+      // has set it; after that it would resurrect the landing page over the
+      // current one.
       if (routeRef.current !== null) return;
-      const initial = subPathFromSnapshot();
-      if (initial === null) return;
-      applyRoute(initial);
-      const seed = seedRef.current ? null : landingHistorySeed(initial);
+      applyRoute(next);
+      const seed = seedRef.current ? null : landingHistorySeed(next);
       if (seed !== null) {
-        seedRef.current = { phase: 'replacing', seed, landing: initial, sends: 0 };
+        seedRef.current = { phase: 'replacing', seed, landing: next, sends: 0 };
         tick();
         resend = setInterval(tick, SEED_RESEND_MS);
       }
     };
 
-    const offSnapshot = transport.subscribe(syncInitRoute);
-    // ROUTE_CHANGED is newer than the installed SDK's message union, so the
-    // transport's typed surface cannot name it. The runtime deliberately
-    // passes unrecognized pushes to handlers registered by name; the payload
-    // is validated here instead.
-    const offRoute = transport.onMessage(
-      ROUTE_CHANGED as unknown as ParentToBlockMessageType,
-      (payload) => {
-        const next = subPathFromRouteChanged(payload);
-        if (next === null) return;
-        const cur = seedRef.current;
-        if (cur && cur.phase !== 'done') {
-          const step = seedRouteChanged(cur, next);
-          seedRef.current = step.state;
-          if (step.state.phase !== 'replacing') stopResend();
-          runEffect(step.effect);
-          if (!step.render) return;
-        }
-        applyRoute(next);
-      },
-    );
-    syncInitRoute();
+    const offSnapshot = transport.subscribe(syncHostRoute);
+    syncHostRoute();
 
     return () => {
       stopResend();
       offSnapshot();
-      offRoute();
     };
   }, [applyRoute]);
 
