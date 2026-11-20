@@ -18,6 +18,7 @@ import type {
   SheetSettings,
 } from './types.js';
 import { composePanelPrompt } from './prompt.js';
+import { sourceImageOf } from './types.js';
 import { buildWorkflowBody, type AccountChoice } from '../money/generation.js';
 import type { CheckpointOption, LoraOption } from '../models.js';
 
@@ -49,7 +50,7 @@ export function buildSheetPanelBody(
   }));
   const sourceImages: BlockSourceImage[] | undefined =
     opts.useReference && character.referenceImage
-      ? [character.referenceImage]
+      ? [sourceImageOf(character.referenceImage)]
       : undefined;
   return buildWorkflowBody(
     prompt,

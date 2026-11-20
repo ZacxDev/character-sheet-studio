@@ -36,6 +36,8 @@ import {
 } from '../money/generation.js';
 import { startPollLoop } from '../money/pollLoop.js';
 import { idempotencyKeyFor } from '../sheet/batch.js';
+import { useDocumentStorage } from '../sheet/doc-storage.js';
+import { deleteSharedSheet } from '../sheet/shared-sheet.js';
 import {
   buildCharacterPromptEnhanceBody,
   buildNegativePromptEnhanceBody,
@@ -48,10 +50,10 @@ import type {
   CharacterRefImage,
   SeedPolicy,
 } from '../sheet/types.js';
-import { newCharacter } from '../sheet/types.js';
+import { newCharacter, refImageFromSource } from '../sheet/types.js';
 import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
 import { characterImageUrls, characterProfileUrl } from '../sheet/profile.js';
-import { parseListInput, storeErrorMessage } from './common.js';
+import { parseListInput, PORTRAIT_PENDING_COPY, storeErrorMessage } from './common.js';
 import {
   randomDescription,
   randomName,
@@ -258,6 +260,8 @@ export function Characters({
   const [editor, setEditor] = useState<EditorState>(initialEditor ?? null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const docs = useDocumentStorage();
   // Bumped to remount (reset) the inline empty-state create form on Cancel.
   const [inlineNonce, setInlineNonce] = useState(0);
 
@@ -274,8 +278,10 @@ export function Characters({
   // Sheet count per character — shown on the card; every card click opens
   // the character's own page regardless of count.
   const sheetsByCharacter = new Map<string, number>();
+  const sharedByCharacter = new Map<string, number>();
   for (const s of library.sheets) {
     sheetsByCharacter.set(s.characterId, (sheetsByCharacter.get(s.characterId) ?? 0) + 1);
+    if (s.shareKey) sharedByCharacter.set(s.characterId, (sharedByCharacter.get(s.characterId) ?? 0) + 1);
   }
 
   // Generated panel images per character (newest sheet first, up to 8 —
@@ -300,10 +306,39 @@ export function Characters({
     setConfirmDeleteId(id);
   };
 
+  // The character's sheets stay (labeled "Unknown character"), but their share
+  // links stop first: a link that names a deleted character is not something
+  // the viewer chose to keep public. Each stopped record's key is cleared from
+  // its sheet; if any record can't be removed, the character is kept so the
+  // viewer can retry (each sheet still has its own Stop sharing).
   const doDelete = async (id: string) => {
+    if (deletingId !== null) return;
     setConfirmDeleteId(null);
-    const err = await library.deleteCharacter(id);
-    if (err) setDeleteError(storeErrorMessage(err));
+    setDeletingId(id);
+    try {
+      const shared = library.sheets.filter((s) => s.characterId === id && s.shareKey);
+      let refused = false;
+      for (const sheet of shared) {
+        try {
+          if (!docs) throw new Error('no storage client');
+          await deleteSharedSheet(docs, sheet.shareKey as string);
+        } catch {
+          refused = true;
+          continue;
+        }
+        const { shareKey: _stopped, ...rest } = sheet;
+        await library.saveSheet({ ...rest, updatedAt: new Date().toISOString() });
+      }
+      if (refused) {
+        const name = library.characters.find((c) => c.id === id)?.name ?? 'this character';
+        setDeleteError(`Couldn’t stop sharing ${name}’s sheets, so ${name} was kept. Try again.`);
+        return;
+      }
+      const err = await library.deleteCharacter(id);
+      if (err) setDeleteError(storeErrorMessage(err));
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   // Create/edit are their own pages: when one is open, the cast list is not
@@ -402,6 +437,7 @@ export function Characters({
           <div className="css-grid-cards">
         {library.characters.map((c) => {
           const sheetCount = sheetsByCharacter.get(c.id) ?? 0;
+          const sharedCount = sharedByCharacter.get(c.id) ?? 0;
           const thumbs = thumbsByCharacter.get(c.id) ?? [];
           const openCharacter = () =>
             onOpenCharacter
@@ -483,16 +519,24 @@ export function Characters({
 
               {confirmDeleteId === c.id && (
                 <div onClick={(e) => e.stopPropagation()}>
-                  <p style={{ margin: '10px 0 0', fontSize: 13, opacity: 0.75 }}>
+                  <p
+                    style={{ margin: '10px 0 0', fontSize: 13, opacity: 0.75 }}
+                    data-testid="char-delete-copy"
+                  >
                     {sheetCount > 0
                       ? `Deleting ${c.name} won’t delete their sheets — ${sheetCount} sheet${sheetCount === 1 ? '' : 's'} keep their images, labeled “Unknown character”.`
                       : `Delete ${c.name}? This can’t be undone.`}
+                    {sharedCount > 0
+                      ? ` ${sharedCount} shared sheet${sharedCount === 1 ? ' stops' : 's stop'} being shared: ${sharedCount === 1 ? 'its link stops' : 'their links stop'} working. Images you published stay on Civitai.`
+                      : ''}
                   </p>
                   <Group gap="sm" style={{ marginTop: 8 }}>
                     <Button
                       size="sm"
                       color="red"
                       onClick={() => void doDelete(c.id)}
+                      loading={deletingId === c.id}
+                      disabled={deletingId !== null}
                       data-testid="char-confirm-delete"
                     >
                       Confirm delete
@@ -583,7 +627,7 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoi
     try {
       const info = await openUpload();
       if (info) {
-        setRefImage({ url: info.url, width: info.width, height: info.height });
+        setRefImage(refImageFromSource(info));
       }
     } finally {
       setUploading(false);
@@ -1103,6 +1147,11 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoi
                 )}
               </Group>
             </div>
+            {refImage?.ready === false && (
+              <Alert color="warning" data-testid="char-portrait-pending">
+                {PORTRAIT_PENDING_COPY}
+              </Alert>
+            )}
             <FieldHelp>
               Used as an img2img source when you enable it on a sheet. It is
               kept private and never published.

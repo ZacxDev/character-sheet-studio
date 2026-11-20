@@ -28,3 +28,11 @@ export function parseListInput(raw: string): string[] {
     .map((s) => s.trim().replace(/\s+/g, ' '))
     .filter((s) => s !== '');
 }
+
+/**
+ * A reference portrait saved with `ready: false` (civitai#9189): Civitai was
+ * still checking it when it was added. Worded as a fact about that moment, so
+ * it stays true after the check finishes; a run the host accepts clears it.
+ */
+export const PORTRAIT_PENDING_COPY =
+  'Civitai was still checking this portrait when it was added. If a sheet that uses it is refused, wait a minute and run it again.';

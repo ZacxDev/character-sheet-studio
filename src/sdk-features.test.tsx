@@ -257,7 +257,8 @@ describe('Sheet View with the App SDK 0.91 features', () => {
     expect(notice).toHaveTextContent('Now Kaida’s reference portrait.');
     expect(host.persistCalls).toEqual([{ workflowId: 'wf-a', imageIndex: 1 }]);
     expect(savedChars).toHaveLength(1);
-    expect(savedChars[0].referenceImage).toEqual({ url: PERSISTED_URL, width: 832, height: 1216 });
+    // The host's scan flag is kept (civitai#9189); imageId is not needed.
+    expect(savedChars[0].referenceImage).toEqual({ url: PERSISTED_URL, width: 832, height: 1216, ready: true });
   }, 15000);
 
   it('use as reference: a source still being scanned says the next run may wait', async () => {

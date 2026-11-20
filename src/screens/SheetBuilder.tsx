@@ -85,7 +85,7 @@ import type { ModelStack, PanelKind, PanelSpec, SheetJob, SheetPanel } from '../
 import { PANEL_KINDS, PANEL_LABELS, defaultPanelSpecs, newSheetJob } from '../sheet/types.js';
 import { checkpointDisplayLabel } from '../models.js';
 import type { SheetLibrary } from '../sheet/useSheetLibrary.js';
-import { storeErrorMessage } from './common.js';
+import { PORTRAIT_PENDING_COPY, storeErrorMessage } from './common.js';
 import { StackEditor } from './Stacks.js';
 
 export interface SheetBuilderProps {
@@ -613,6 +613,17 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
     }
 
     const anyLive = panels.some((p) => p.workflowId);
+    // The host refuses a run whose source is still being checked
+    // (`source-scan-pending`), so a run it took proves the portrait's check
+    // finished: clear the pending note. Best-effort, like the sheet saves.
+    const ref = c.referenceImage;
+    if (bodyOpts.useReference && ref?.ready === false && panels.some((p) => p.workflowId || p.status === 'done')) {
+      await library.saveCharacter({
+        ...c,
+        referenceImage: { ...ref, ready: true },
+        updatedAt: new Date().toISOString(),
+      });
+    }
     job.status = anyLive ? 'running' : 'failed';
     job.updatedAt = new Date().toISOString();
     const saveErr = await library.saveSheet({ ...job, panels: [...panels] });
@@ -1617,6 +1628,11 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
                 Use reference portrait as img2img source
               </label>
             )}
+            {character?.referenceImage?.ready === false && (
+              <Alert color="warning" data-testid="sb-portrait-pending">
+                {PORTRAIT_PENDING_COPY}
+              </Alert>
+            )}
 
             {phase === 'estimating' && (
               <Group gap="sm" align="center">
@@ -1728,6 +1744,11 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
                 {character?.name} · {stack?.name} · {draft.panels.length} panels
                 {useReference && character?.referenceImage ? ' · img2img from portrait' : ''}
               </div>
+              {useReference && character?.referenceImage?.ready === false && (
+                <Alert color="warning" data-testid="sb-portrait-pending">
+                  {PORTRAIT_PENDING_COPY}
+                </Alert>
+              )}
               <Stack gap="xs">
                 {draft.panels.map((p) => {
                   const e = estimates[p.id];
