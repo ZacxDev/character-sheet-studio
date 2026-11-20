@@ -52,6 +52,7 @@ import { buildSheetPanelBody } from '../sheet/body.js';
 import { useDocumentStorage } from '../sheet/doc-storage.js';
 import {
   buildSharedSheetDoc,
+  deleteSharedSheet,
   saveSharedSheet,
   STORAGE_PUBLISH_SCOPE,
 } from '../sheet/shared-sheet.js';
@@ -1050,23 +1051,37 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
     setSharing(true);
     try {
       const entries: { label: string; imageId: number }[] = [];
+      // Finished panels that could not be shared: the workflow no longer has a
+      // readable result (old workflows read as failed), or publishing it
+      // produced no image.
+      let unreadable = 0;
       for (const p of cur.panels) {
         if (p.status !== 'done' || !p.workflowId || p.outputs.length === 0) continue;
         let imageId = p.publishedImageId;
         if (imageId === undefined) {
           const snap = await pollRef.current(p.workflowId);
           const position = outputPosition(snap, 'available');
-          if (position === null) continue;
+          if (position === null) {
+            unreadable += 1;
+            continue;
+          }
           const ids = await publish({ workflowId: p.workflowId, imageIndexes: [position], title: p.label });
           const first = ids[0];
-          if (typeof first !== 'number') continue;
+          if (typeof first !== 'number') {
+            unreadable += 1;
+            continue;
+          }
           imageId = first;
           await setPanel(p.id, (x) => ({ ...x, published: true, publishedImageId: first }));
         }
         entries.push({ label: p.label, imageId });
       }
       if (entries.length === 0) {
-        setShareNotice('Nothing to share yet. Finish at least one panel first.');
+        setShareNotice(
+          unreadable > 0
+            ? 'These panels can’t be shared: Civitai no longer has their results. Regenerate a panel to share it.'
+            : 'Nothing to share yet. Finish at least one panel first.',
+        );
         return;
       }
       const doc = buildSharedSheetDoc({
@@ -1077,7 +1092,10 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       const key = await saveSharedSheet(docs, doc, cur.shareKey);
       if (key !== cur.shareKey) await updateSheet((s) => ({ ...s, shareKey: key }));
       setShareNotice(
-        `Shared ${entries.length} panel${entries.length === 1 ? '' : 's'}. Press Copy link to send it.`,
+        `Shared ${entries.length} panel${entries.length === 1 ? '' : 's'}. Press Copy link to send it.` +
+          (unreadable > 0
+            ? ` ${unreadable} panel${unreadable === 1 ? '' : 's'} couldn’t be shared: Civitai no longer has their results.`
+            : ''),
       );
     } catch {
       setShareNotice(
@@ -1087,6 +1105,28 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       setSharing(false);
     }
   }, [anon, docs, library.characters, publish, publishGranted, requestConsent, requestSignIn, setPanel, updateSheet]);
+
+  // Stop sharing: delete the shared record so the link stops opening the sheet
+  // for anyone, then forget the key. The published images stay on Civitai.
+  const unshareSheet = useCallback(async () => {
+    const cur = sheetRef.current;
+    if (!cur?.shareKey) return;
+    setShareNotice(null);
+    if (!docs) {
+      setShareNotice('Sharing isn’t available right now. Reload the app and try again.');
+      return;
+    }
+    setSharing(true);
+    try {
+      await deleteSharedSheet(docs, cur.shareKey);
+      await updateSheet((s) => ({ ...s, shareKey: undefined }));
+      setShareNotice('Stopped sharing. The link no longer opens this sheet.');
+    } catch {
+      setShareNotice('Couldn’t stop sharing. The link still works; try again.');
+    } finally {
+      setSharing(false);
+    }
+  }, [docs, updateSheet]);
 
   // --- post to profile -----------------------------------------------------------
   // Publishes a real, feed-visible Civitai post from this app's own workflow
@@ -1225,6 +1265,19 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
   }, [nameDraft, updateSheet]);
 
   const deleteSheet = useCallback(async () => {
+    // A shared sheet's record goes first: deleting the sheet alone would leave
+    // a live link nobody can stop any more. If that fails, keep the sheet.
+    const key = sheetRef.current?.shareKey;
+    if (key) {
+      try {
+        if (!docs) throw new Error('no storage client');
+        await deleteSharedSheet(docs, key);
+      } catch {
+        setError('Couldn’t remove this sheet’s share link, so the sheet was kept. Try again.');
+        setConfirmDelete(false);
+        return;
+      }
+    }
     const err = await library.deleteSheet(sheetId);
     if (err) {
       setError(storeErrorMessage(err));
@@ -1232,7 +1285,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       return;
     }
     onBack();
-  }, [library, onBack, sheetId]);
+  }, [docs, library, onBack, sheetId]);
 
   // --- render ----------------------------------------------------------------------
 
@@ -1384,6 +1437,18 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
                 Copy link
               </Button>
             )}
+            {sheet.shareKey && (
+              <Button
+                variant="subtle"
+                color="error"
+                loading={sharing}
+                disabled={sharing}
+                data-testid="se-unshare-sheet"
+                onClick={() => void unshareSheet()}
+              >
+                Stop sharing
+              </Button>
+            )}
           </Group>
           {shareNotice && (
             <span style={{ fontSize: 13 }} data-testid="se-share-notice">
@@ -1431,6 +1496,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
             <span style={{ fontSize: 13 }}>
               This deletes the sheet and its panel records — generated images
               stay in your Civitai creations.
+              {sheet.shareKey ? ' Its share link stops working too; images you published stay published.' : ''}
             </span>
             <Group gap="sm">
               <Button
