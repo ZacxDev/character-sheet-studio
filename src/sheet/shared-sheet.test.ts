@@ -67,3 +67,19 @@ describe('normalizeSharedSheetDoc', () => {
     expect(normalizeSharedSheetDoc({ v: 1, characterName: 3, sheetName: 'b', panels: [] })).toBeNull();
   });
 });
+
+describe('saveSharedSheet', () => {
+  it('a key whose record is gone gets a NEW key instead of reviving the old link', async () => {
+    const { createAppFakeStorage } = await import('./fake-doc-storage.js');
+    const { saveSharedSheet, deleteSharedSheet } = await import('./shared-sheet.js');
+    const fake = createAppFakeStorage();
+    const source = async () => fake.storage;
+    const doc = { v: 1 as const, characterName: 'A', sheetName: 'B', panels: [{ label: 'F', imageId: 7 }] };
+    const first = await saveSharedSheet(source, doc);
+    expect(await saveSharedSheet(source, doc, first)).toBe(first); // live record: replaced in place
+    await deleteSharedSheet(source, first);
+    const second = await saveSharedSheet(source, doc, first);
+    expect(second).not.toBe(first);
+    expect(await fake.storage.collection('shared_sheets').get(first)).toBeNull();
+  });
+});

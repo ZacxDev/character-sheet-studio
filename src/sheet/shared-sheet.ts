@@ -101,8 +101,24 @@ export async function saveSharedSheet(
 ): Promise<string> {
   const storage = await source();
   const collection = storage.collection<SharedSheetDoc>(SHARED_SHEETS_COLLECTION);
-  const written = key ? await collection.put(key, doc) : await collection.create(doc);
-  return written.key;
+  // Replace only a record that still exists. A key whose record was deleted
+  // (stopped, or a save that lost the key's removal) gets a NEW key: writing
+  // at the old one would bring a stopped link back for everyone who has it.
+  if (key && (await collection.get(key)) !== null) {
+    return (await collection.put(key, doc)).key;
+  }
+  return (await collection.create(doc)).key;
+}
+
+/**
+ * Delete a shared record, so its link stops opening the sheet for anyone. Only
+ * its author can (`write: "own"`). Idempotent: an already-missing record is not
+ * an error. The published images it pointed at stay on Civitai; nothing here
+ * can unpublish an image.
+ */
+export async function deleteSharedSheet(source: DocumentStorageSource, key: string): Promise<void> {
+  const storage = await source();
+  await storage.collection<SharedSheetDoc>(SHARED_SHEETS_COLLECTION).delete(key);
 }
 
 /** Read a shared record; null when it is missing or not a sheet record. */
