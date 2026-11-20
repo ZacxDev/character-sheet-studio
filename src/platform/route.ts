@@ -29,7 +29,8 @@ export type AppRoute =
   | { name: 'stack-edit'; stackId: string }
   | { name: 'builder'; characterId?: string }
   | { name: 'sheets'; characterId?: string }
-  | { name: 'sheet'; sheetId: string };
+  | { name: 'sheet'; sheetId: string }
+  | { name: 'shared-sheet'; shareKey: string };
 
 /** Normalize a host sub-path or an app navigation target to no edge slashes. */
 export function normalizeRoutePath(path: string): string {
@@ -88,6 +89,12 @@ export function parseAppRoute(subPath: string): AppRoute {
     return { name: 'sheets' };
   }
 
+  if (root === 'share') {
+    const shareKey = idSegment(second);
+    if (shareKey && third === undefined) return { name: 'shared-sheet', shareKey };
+    return { name: 'characters' };
+  }
+
   // Unknown routes land on the cast list rather than a blank page. This does
   // not rewrite the host history; the next explicit navigation replaces it.
   return { name: 'characters' };
@@ -127,6 +134,24 @@ export function sheetRoute(sheetId: string): string {
   return `sheets/${encodeURIComponent(sheetId)}`;
 }
 
+/** A sheet someone shared by link: `share/<key>` (HQ app_blocks_sdk_j1gc). */
+export function sharedSheetRoute(shareKey: string): string {
+  return `share/${encodeURIComponent(shareKey)}`;
+}
+
+/** The app's gallery, where Back from a shared sheet lands. */
+export const GALLERY_ROUTE = 'characters';
+
+/**
+ * The history entry to put UNDER the landing view, or null. A shared link opened
+ * in a new tab starts the host's history at the shared sheet, so Back would
+ * leave the app. For that landing only, the app replaces the entry with the
+ * gallery and pushes the shared sheet again, so Back returns to the gallery.
+ */
+export function landingHistorySeed(initialSubPath: string): string | null {
+  return parseAppRoute(initialSubPath).name === 'shared-sheet' ? GALLERY_ROUTE : null;
+}
+
 function subPathFromSnapshot(): string | null {
   const snapshot = getTransport().getSnapshot();
   if (!snapshot.ready) return null;
@@ -153,6 +178,9 @@ export function useAppRoute(): AppRouteController {
   const { navigate } = useCivitaiNavigate();
   const [subPath, setSubPath] = useState<string | null>(null);
   const routeRef = useRef<string | null>(null);
+  const seededRef = useRef(false);
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
 
   const applyRoute = useCallback((next: string) => {
     if (routeRef.current === next) return;
@@ -169,7 +197,14 @@ export function useAppRoute(): AppRouteController {
       // after that it would resurrect the landing page over the current one.
       if (routeRef.current !== null) return;
       const initial = subPathFromSnapshot();
-      if (initial !== null) applyRoute(initial);
+      if (initial === null) return;
+      applyRoute(initial);
+      const seed = seededRef.current ? null : landingHistorySeed(initial);
+      if (seed !== null) {
+        seededRef.current = true;
+        navigateRef.current(seed, { replace: true });
+        navigateRef.current(initial);
+      }
     };
 
     const offSnapshot = transport.subscribe(syncInitRoute);

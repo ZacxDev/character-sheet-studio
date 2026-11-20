@@ -501,6 +501,11 @@ export interface SheetPanel extends PanelSpec {
   errorCode?: string;
   /** Set after a successful Publish — the panel shows a persistent marker. */
   published?: boolean;
+  /**
+   * The Civitai image ID that Publish (or Share sheet) created for this panel,
+   * so sharing again reuses it instead of publishing a second copy.
+   */
+  publishedImageId?: number;
   /** Set after this panel joined a Civitai post (Post button) — persistent marker. */
   posted?: boolean;
   /** URL of the Civitai post this panel's image landed in. */
@@ -514,6 +519,10 @@ export interface SheetPanel extends PanelSpec {
    * orchestrator treats it as a new logical submit.
    */
   submitNonce: number;
+}
+
+function isPositiveInt(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
 }
 
 function normalizeSheetPanel(v: unknown): SheetPanel | null {
@@ -546,6 +555,7 @@ function normalizeSheetPanel(v: unknown): SheetPanel | null {
     ...(repair ? { repair } : {}),
     ...(errorCode ? { errorCode } : {}),
     ...(v.published === true ? { published: true } : {}),
+    ...(isPositiveInt(v.publishedImageId) ? { publishedImageId: v.publishedImageId } : {}),
     ...(v.posted === true ? { posted: true } : {}),
     ...(postUrl ? { postUrl } : {}),
     submitNonce: asInt(v.submitNonce) ?? 0,
@@ -590,6 +600,8 @@ export interface SheetJob {
   panels: SheetPanel[];
   /** URL of the Civitai post created by "Post sheet" (all done panels at once). */
   postUrl?: string;
+  /** Key of this sheet's record in the shared `shared_sheets` collection, once shared. */
+  shareKey?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -613,6 +625,7 @@ export function normalizeSheetJob(v: unknown): SheetJob | null {
   if (panels.length === 0) return null;
   const account = v.account === 'blue' || v.account === 'green' || v.account === 'yellow' ? v.account : 'auto';
   const postUrl = asNonEmptyString(v.postUrl) ?? undefined;
+  const shareKey = asNonEmptyString(v.shareKey) ?? undefined;
   return {
     id,
     name: asNonEmptyString(v.name) ?? 'Untitled sheet',
@@ -624,6 +637,7 @@ export function normalizeSheetJob(v: unknown): SheetJob | null {
     status: isSheetStatus(v.status) ? v.status : 'draft',
     panels,
     ...(postUrl ? { postUrl } : {}),
+    ...(shareKey ? { shareKey } : {}),
     createdAt: asString(v.createdAt) ?? isoNow(),
     updatedAt: asString(v.updatedAt) ?? isoNow(),
   };

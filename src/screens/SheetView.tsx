@@ -22,6 +22,7 @@ import {
   useRequestConsent,
   useRequestSignIn,
   useSaveImage,
+  useShareLink,
 } from '@civitai/blocks-react';
 import {
   Alert,
@@ -46,7 +47,14 @@ import {
   isSettledSnapshot,
 } from '../money/generation.js';
 import { startPollLoop } from '../money/pollLoop.js';
+import { sharedSheetRoute } from '../platform/route.js';
 import { buildSheetPanelBody } from '../sheet/body.js';
+import { useDocumentStorage } from '../sheet/doc-storage.js';
+import {
+  buildSharedSheetDoc,
+  saveSharedSheet,
+  STORAGE_PUBLISH_SCOPE,
+} from '../sheet/shared-sheet.js';
 import {
   createPostErrorCopy,
   hasPostsScope,
@@ -164,6 +172,8 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
   const { createPost } = useCreatePostFromApp();
   const { unlockOutput } = useOutputUnlock();
   const { persist } = usePersistGenerationSource();
+  const { share: shareLink, lastResult: shareResult, error: shareError } = useShareLink();
+  const docs = useDocumentStorage();
 
   const anon = ready && !viewer;
   const granted = hasBudgetedScope(token?.scopes);
@@ -204,6 +214,9 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
   const [unlocking, setUnlocking] = useState<string | null>(null);
   const [referencing, setReferencing] = useState<string | null>(null);
   const [panelNotice, setPanelNotice] = useState<{ panelId: string; text: string } | null>(null);
+  // Share sheet: in flight, and the last outcome line.
+  const [sharing, setSharing] = useState(false);
+  const [shareNotice, setShareNotice] = useState<string | null>(null);
   // Live queue / progress per generating panel, from each poll's `eta`. Not
   // persisted: it is only meaningful while the poll loop runs.
   const [etaByPanel, setEtaByPanel] = useState<Record<string, PanelEta>>({});
@@ -902,9 +915,15 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       if (!panel.workflowId) return;
       setPublishing(panel.id);
       try {
-        await publish({ workflowId: panel.workflowId, imageIndexes: [0], title: panel.label });
+        const ids = await publish({ workflowId: panel.workflowId, imageIndexes: [0], title: panel.label });
         // Persistent marker (survives reload) so Publish never looks unclicked.
-        await setPanel(panel.id, (p) => ({ ...p, published: true }));
+        // The image ID lets Share sheet reuse this publish.
+        const imageId = ids[0];
+        await setPanel(panel.id, (p) => ({
+          ...p,
+          published: true,
+          ...(typeof imageId === 'number' ? { publishedImageId: imageId } : {}),
+        }));
       } catch {
         setError('Publish failed — the host refused (or you dismissed the confirm).');
       } finally {
@@ -995,6 +1014,70 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
     },
     [library, persist],
   );
+
+  // --- share sheet -------------------------------------------------------------------
+  // Publishes each finished panel not published yet (the host's confirm, one
+  // per panel), then writes the sheet's shared record of image IDs. The link is
+  // copied by a SEPARATE click (Copy link): the copy needs a fresh click, and
+  // the publish confirms in between would expire this one.
+
+  const publishGranted = (token?.scopes ?? []).includes(STORAGE_PUBLISH_SCOPE);
+
+  const shareSheet = useCallback(async () => {
+    const cur = sheetRef.current;
+    if (!cur || !docs) return;
+    setShareNotice(null);
+    if (anon) {
+      requestSignIn();
+      setShareNotice('Sign in to share a sheet.');
+      return;
+    }
+    if (!publishGranted) {
+      requestConsent({ scopes: [STORAGE_PUBLISH_SCOPE] });
+      setShareNotice('Approve sharing in the Civitai dialog, then press Share sheet again.');
+      return;
+    }
+    const owner = library.characters.find((c) => c.id === cur.characterId);
+    setSharing(true);
+    try {
+      const entries: { label: string; imageId: number }[] = [];
+      for (const p of cur.panels) {
+        if (p.status !== 'done' || !p.workflowId || p.outputs.length === 0) continue;
+        let imageId = p.publishedImageId;
+        if (imageId === undefined) {
+          const snap = await pollRef.current(p.workflowId);
+          const position = outputPosition(snap, 'available');
+          if (position === null) continue;
+          const ids = await publish({ workflowId: p.workflowId, imageIndexes: [position], title: p.label });
+          const first = ids[0];
+          if (typeof first !== 'number') continue;
+          imageId = first;
+          await setPanel(p.id, (x) => ({ ...x, published: true, publishedImageId: first }));
+        }
+        entries.push({ label: p.label, imageId });
+      }
+      if (entries.length === 0) {
+        setShareNotice('Nothing to share yet. Finish at least one panel first.');
+        return;
+      }
+      const doc = buildSharedSheetDoc({
+        characterName: owner?.name ?? 'Character',
+        sheetName: cur.name,
+        panels: entries,
+      });
+      const key = await saveSharedSheet(docs, doc, cur.shareKey);
+      if (key !== cur.shareKey) await updateSheet((s) => ({ ...s, shareKey: key }));
+      setShareNotice(
+        `Shared ${entries.length} panel${entries.length === 1 ? '' : 's'}. Press Copy link to send it.`,
+      );
+    } catch {
+      setShareNotice(
+        'Couldn’t share the sheet. If you closed a publish confirm, press Share sheet again; panels already published are kept.',
+      );
+    } finally {
+      setSharing(false);
+    }
+  }, [anon, docs, library.characters, publish, publishGranted, requestConsent, requestSignIn, setPanel, updateSheet]);
 
   // --- post to profile -----------------------------------------------------------
   // Publishes a real, feed-visible Civitai post from this app's own workflow
@@ -1270,7 +1353,53 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
             >
               Regenerate sheet
             </Button>
+            <Button
+              variant="light"
+              loading={sharing}
+              disabled={sharing || doneCount === 0}
+              data-testid="se-share-sheet"
+              onClick={() => void shareSheet()}
+            >
+              {sheet.shareKey ? 'Update shared sheet' : 'Share sheet'}
+            </Button>
+            {sheet.shareKey && (
+              <Button
+                variant="subtle"
+                data-testid="se-copy-link"
+                // Straight from the click, nothing awaited first: the host's
+                // clipboard write needs this click.
+                onClick={() => {
+                  shareLink({ subPath: sharedSheetRoute(sheet.shareKey!) }).catch(() => undefined);
+                }}
+              >
+                Copy link
+              </Button>
+            )}
           </Group>
+          {shareNotice && (
+            <span style={{ fontSize: 13 }} data-testid="se-share-notice">
+              {shareNotice}
+            </span>
+          )}
+          {shareResult?.copied && (
+            <span style={{ fontSize: 13 }} data-testid="se-link-copied">
+              Link copied.
+            </span>
+          )}
+          {shareResult && !shareResult.copied && shareResult.method === 'none' && (
+            <TextInput
+              readOnly
+              aria-label="Share link"
+              data-testid="se-share-url"
+              value={shareResult.url}
+              onFocus={(e) => e.currentTarget.select()}
+            />
+          )}
+          {shareError && (
+            <span role="alert" style={{ fontSize: 13 }}>
+              Couldn’t copy the link: {shareError.message}
+            </span>
+          )}
           {sheet.postUrl && (
             <Group gap="sm" align="center">
               <span style={{ fontSize: 13 }}>Posted ✓</span>
