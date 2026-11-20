@@ -340,7 +340,11 @@ export function Characters({
       // Sheets whose record is gone, so their link no longer works. A failure
       // after this point leaves them stopped, so the error has to say so.
       // Sharing one again mints a new link (saveSharedSheet), even if its save
-      // below failed and it still holds the old key.
+      // below failed: on screen the key is already gone (saveSheet updates the
+      // library before it stores), and the stored copy still holds the dead
+      // key, which an Update shared sheet after a reload replaces. The names
+      // cover this attempt only: a sheet a previous attempt stopped has no key
+      // on screen any more, so it is not in `shared` and not named here.
       const stopped: string[] = [];
       for (const sheet of shared) {
         try {
