@@ -132,7 +132,7 @@ export function SharedSheetView({ shareKey, onGallery }: SharedSheetViewProps) {
                       fontSize: 13,
                     }}
                   >
-                    {g ? 'Hidden at your content settings.' : 'This image is no longer available.'}
+                    {g ? 'This image can’t be shown to you here.' : 'This image is no longer available.'}
                   </div>
                 )}
               </Stack>

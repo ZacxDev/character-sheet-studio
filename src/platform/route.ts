@@ -152,6 +152,62 @@ export function landingHistorySeed(initialSubPath: string): string | null {
   return parseAppRoute(initialSubPath).name === 'shared-sheet' ? GALLERY_ROUTE : null;
 }
 
+/**
+ * The seed is two NAVIGATEs, and the page host DROPS a NAVIGATE that arrives
+ * before its handshake has settled, with no reply. The app's first chance to
+ * send is earlier than that, so the seed is driven by the host's own
+ * ROUTE_CHANGED acknowledgements rather than fired once:
+ *   - `replacing`: send `replace(seed)`, re-sent on a timer until the host
+ *     answers ROUTE_CHANGED(seed), at most {@link SEED_MAX_SENDS} times;
+ *   - then `pushing`: send `push(landing)` once; its ROUTE_CHANGED ends it.
+ * While seeding, ROUTE_CHANGED(seed) is the host's ack and is not rendered,
+ * so the gallery never flashes. Out of sends, it gives up and Back leaves the
+ * app, as it did before. Pure, so the sequence is unit-tested.
+ */
+export type SeedState =
+  | { phase: 'replacing'; seed: string; landing: string; sends: number }
+  | { phase: 'pushing'; seed: string; landing: string }
+  | { phase: 'done' };
+
+export const SEED_MAX_SENDS = 8;
+export const SEED_RESEND_MS = 600;
+
+export type SeedEffect =
+  | { kind: 'replace'; path: string }
+  | { kind: 'push'; path: string }
+  | { kind: 'none' };
+
+/** A resend tick while replacing. */
+export function seedTick(state: SeedState): { state: SeedState; effect: SeedEffect } {
+  if (state.phase !== 'replacing') return { state, effect: { kind: 'none' } };
+  if (state.sends >= SEED_MAX_SENDS) return { state: { phase: 'done' }, effect: { kind: 'none' } };
+  return {
+    state: { ...state, sends: state.sends + 1 },
+    effect: { kind: 'replace', path: state.seed },
+  };
+}
+
+/**
+ * A ROUTE_CHANGED from the host while seeding. `render` is false when the push
+ * is the seed's own acknowledgement and must not move the app's view.
+ */
+export function seedRouteChanged(
+  state: SeedState,
+  next: string,
+): { state: SeedState; effect: SeedEffect; render: boolean } {
+  if (state.phase === 'replacing' && next === state.seed) {
+    return {
+      state: { phase: 'pushing', seed: state.seed, landing: state.landing },
+      effect: { kind: 'push', path: state.landing },
+      render: false,
+    };
+  }
+  if (state.phase === 'pushing' && next === state.landing) {
+    return { state: { phase: 'done' }, effect: { kind: 'none' }, render: true };
+  }
+  return { state, effect: { kind: 'none' }, render: true };
+}
+
 function subPathFromSnapshot(): string | null {
   const snapshot = getTransport().getSnapshot();
   if (!snapshot.ready) return null;
@@ -178,7 +234,10 @@ export function useAppRoute(): AppRouteController {
   const { navigate } = useCivitaiNavigate();
   const [subPath, setSubPath] = useState<string | null>(null);
   const routeRef = useRef<string | null>(null);
-  const seededRef = useRef(false);
+  const seedRef = useRef<SeedState | null>(null);
+  // An app navigation ends any seed in flight: a late replace would otherwise
+  // overwrite the entry the viewer just moved to.
+  const cancelSeedRef = useRef<() => void>(() => undefined);
   const navigateRef = useRef(navigate);
   navigateRef.current = navigate;
 
@@ -190,6 +249,27 @@ export function useAppRoute(): AppRouteController {
 
   useEffect(() => {
     const transport = getTransport();
+    let resend: ReturnType<typeof setInterval> | null = null;
+    const stopResend = () => {
+      if (resend !== null) clearInterval(resend);
+      resend = null;
+    };
+    cancelSeedRef.current = () => {
+      if (seedRef.current) seedRef.current = { phase: 'done' };
+      stopResend();
+    };
+    const runEffect = (effect: SeedEffect) => {
+      if (effect.kind === 'replace') navigateRef.current(effect.path, { replace: true });
+      else if (effect.kind === 'push') navigateRef.current(effect.path);
+    };
+    const tick = () => {
+      const cur = seedRef.current;
+      if (!cur) return;
+      const { state, effect } = seedTick(cur);
+      seedRef.current = state;
+      if (state.phase !== 'replacing') stopResend();
+      runEffect(effect);
+    };
 
     const syncInitRoute = () => {
       // The snapshot's context forever carries the INIT sub-path. It may seed
@@ -199,11 +279,11 @@ export function useAppRoute(): AppRouteController {
       const initial = subPathFromSnapshot();
       if (initial === null) return;
       applyRoute(initial);
-      const seed = seededRef.current ? null : landingHistorySeed(initial);
+      const seed = seedRef.current ? null : landingHistorySeed(initial);
       if (seed !== null) {
-        seededRef.current = true;
-        navigateRef.current(seed, { replace: true });
-        navigateRef.current(initial);
+        seedRef.current = { phase: 'replacing', seed, landing: initial, sends: 0 };
+        tick();
+        resend = setInterval(tick, SEED_RESEND_MS);
       }
     };
 
@@ -216,12 +296,22 @@ export function useAppRoute(): AppRouteController {
       ROUTE_CHANGED as unknown as ParentToBlockMessageType,
       (payload) => {
         const next = subPathFromRouteChanged(payload);
-        if (next !== null) applyRoute(next);
+        if (next === null) return;
+        const cur = seedRef.current;
+        if (cur && cur.phase !== 'done') {
+          const step = seedRouteChanged(cur, next);
+          seedRef.current = step.state;
+          if (step.state.phase !== 'replacing') stopResend();
+          runEffect(step.effect);
+          if (!step.render) return;
+        }
+        applyRoute(next);
       },
     );
     syncInitRoute();
 
     return () => {
+      stopResend();
       offSnapshot();
       offRoute();
     };
@@ -230,6 +320,7 @@ export function useAppRoute(): AppRouteController {
   const navigateTo = useCallback(
     (path: string) => {
       const next = normalizeRoutePath(path);
+      cancelSeedRef.current();
       applyRoute(next);
       navigate(next);
     },

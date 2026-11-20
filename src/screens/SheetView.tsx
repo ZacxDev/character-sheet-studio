@@ -599,6 +599,9 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
         locked: undefined,
         repair: undefined,
         errorCode: undefined,
+        // A new image replaces the published one: Share must publish it again.
+        published: undefined,
+        publishedImageId: undefined,
       };
       const body = buildSheetPanelBody(next, character, stack, library.settings, {
         account: cur.account,
@@ -672,6 +675,8 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
           locked: undefined,
           repair: undefined,
           errorCode: undefined,
+          published: undefined,
+          publishedImageId: undefined,
         };
         const body = buildSheetPanelBody(next, character, stack, library.settings, {
           account: cur.account,

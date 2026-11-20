@@ -25,7 +25,15 @@ vi.mock('@civitai/blocks-react', async (importOriginal) => {
   };
 });
 
-import { landingHistorySeed, parseAppRoute, sharedSheetRoute } from './platform/route.js';
+import {
+  landingHistorySeed,
+  parseAppRoute,
+  SEED_MAX_SENDS,
+  seedRouteChanged,
+  seedTick,
+  sharedSheetRoute,
+  type SeedState,
+} from './platform/route.js';
 import { SharedSheetView } from './screens/SharedSheetView.js';
 import { configureDocumentStorage } from './sheet/doc-storage.js';
 import { testDocStore } from './test-doc-store.js';
@@ -68,7 +76,7 @@ describe('Shared sheet (another viewer)', () => {
     expect(host.gatedCalls).toEqual([[90817, 31337]]);
     expect(screen.getByRole('img', { name: 'Side view' })).toHaveAttribute('src', GATED_SIDE_URL);
     expect(screen.queryByRole('img', { name: 'Back view' })).toBeNull();
-    expect(screen.getByTestId('ss-panel-hidden')).toHaveTextContent('Hidden at your content settings.');
+    expect(screen.getByTestId('ss-panel-hidden')).toHaveTextContent('This image can’t be shown to you here.');
   }, 15000);
 
   it('never renders a url planted in a record by another client', async () => {
@@ -140,5 +148,40 @@ describe('manifest: the shared record cannot hold a url', () => {
     expect(item.additionalProperties).toBe(false);
     expect(Object.keys(item.properties).sort()).toEqual(['imageId', 'label']);
     expect(item.properties.imageId.type).toBe('integer');
+  });
+});
+
+describe('the Back seed waits for the host to acknowledge it', () => {
+  const start: SeedState = { phase: 'replacing', seed: 'characters', landing: 'share/k1', sends: 0 };
+
+  it('re-sends the replace until the host answers, then pushes the landing once', () => {
+    let st: SeedState = start;
+    // The host drops the first sends (not ready yet): each tick re-sends.
+    for (let i = 1; i <= 3; i += 1) {
+      const t = seedTick(st);
+      expect(t.effect).toEqual({ kind: 'replace', path: 'characters' });
+      st = t.state;
+    }
+    // The ack: not rendered (no gallery flash), and the landing is pushed.
+    const ack = seedRouteChanged(st, 'characters');
+    expect(ack).toEqual({
+      state: { phase: 'pushing', seed: 'characters', landing: 'share/k1' },
+      effect: { kind: 'push', path: 'share/k1' },
+      render: false,
+    });
+    // Ticks after the ack send nothing.
+    expect(seedTick(ack.state).effect).toEqual({ kind: 'none' });
+    const landed = seedRouteChanged(ack.state, 'share/k1');
+    expect(landed).toEqual({ state: { phase: 'done' }, effect: { kind: 'none' }, render: true });
+  });
+
+  it('gives up after the bounded number of sends', () => {
+    let st: SeedState = start;
+    for (let i = 0; i < SEED_MAX_SENDS; i += 1) st = seedTick(st).state;
+    expect(seedTick(st)).toEqual({ state: { phase: 'done' }, effect: { kind: 'none' } });
+  });
+
+  it('an unrelated route change while seeding is rendered and does not advance the seed', () => {
+    expect(seedRouteChanged(start, 'stacks')).toEqual({ state: start, effect: { kind: 'none' }, render: true });
   });
 });
