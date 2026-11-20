@@ -7,7 +7,12 @@
 
 import { useEffect, useState } from 'react';
 
-import { useGatedImages, type BlockGatedImage } from '@civitai/blocks-react';
+import {
+  useBlockContext,
+  useGatedImages,
+  useRequestSignIn,
+  type BlockGatedImage,
+} from '@civitai/blocks-react';
 import { Alert, Button, Card, Group, Loader, Stack } from '@civitai/blocks-react/ui';
 
 import { useDocumentStorage } from '../sheet/doc-storage.js';
@@ -26,6 +31,8 @@ type LoadState =
   | { kind: 'ready'; doc: SharedSheetDoc; images: Map<number, BlockGatedImage> };
 
 export function SharedSheetView({ shareKey, onGallery }: SharedSheetViewProps) {
+  const { ready, viewer } = useBlockContext();
+  const { requestSignIn } = useRequestSignIn();
   const docs = useDocumentStorage();
   const { getImages } = useGatedImages();
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
@@ -62,6 +69,29 @@ export function SharedSheetView({ shareKey, onGallery }: SharedSheetViewProps) {
       ← Gallery
     </Button>
   );
+
+  // The host is up but there is no storage client (no token or host origin for
+  // this viewer): say so instead of waiting on a load that will never start. A
+  // client that arrives later re-runs the load above.
+  if (ready && !docs) {
+    return (
+      <Stack gap="md">
+        {back}
+        <Alert color="info" data-testid="ss-no-client">
+          <Stack gap="xs">
+            <span>This shared sheet can’t be opened here right now.</span>
+            {!viewer && (
+              <div>
+                <Button size="sm" onClick={() => requestSignIn()}>
+                  Sign in to open it
+                </Button>
+              </div>
+            )}
+          </Stack>
+        </Alert>
+      </Stack>
+    );
+  }
 
   if (state.kind === 'loading') {
     return (

@@ -1030,11 +1030,15 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
 
   const shareSheet = useCallback(async () => {
     const cur = sheetRef.current;
-    if (!cur || !docs) return;
+    if (!cur) return;
     setShareNotice(null);
     if (anon) {
       requestSignIn();
       setShareNotice('Sign in to share a sheet.');
+      return;
+    }
+    if (!docs) {
+      setShareNotice('Sharing isn’t available right now. Reload the app and try again.');
       return;
     }
     if (!publishGranted) {
