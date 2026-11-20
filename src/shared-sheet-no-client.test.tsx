@@ -10,17 +10,6 @@ vi.mock('./sheet/doc-storage.js', async (importOriginal) => {
   return { ...mod, useDocumentStorage: () => null };
 });
 
-vi.mock('@civitai/blocks-react', async (importOriginal) => {
-  const mod = await importOriginal<typeof import('@civitai/blocks-react')>();
-  return {
-    ...mod,
-    useBlockToken: () => {
-      const real = mod.useBlockToken();
-      return { ...real, scopes: [...(real.scopes ?? []), 'apps:storage:publish'] };
-    },
-  };
-});
-
 import { installMockMoneyHost } from './mock-buzz.js';
 import { SharedSheetView } from './screens/SharedSheetView.js';
 import { SheetView } from './screens/SheetView.js';
@@ -86,6 +75,16 @@ describe('share paths with no storage client', () => {
     expect(screen.queryByText('Loading the shared sheet…')).toBeNull();
   }, 15000);
 
+  it('before the host initialises it still shows Loading, not the no-client message', async () => {
+    // No mock host: BLOCK_INIT never arrives, so the block is not ready.
+    render(<SharedSheetView shareKey="k1" onGallery={() => {}} />);
+    expect(await screen.findByText('Loading the shared sheet…')).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(screen.queryByTestId('ss-no-client')).toBeNull();
+  });
+
+  // The token carries no apps:storage:publish here, so this also pins that the
+  // missing client is reported BEFORE the consent prompt.
   it('Share sheet says why nothing happened', async () => {
     uninstall = installMockMoneyHost({ consentGranted: true });
     render(
