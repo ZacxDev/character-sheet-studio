@@ -5,14 +5,16 @@
 // (including the viewer's Android/browser Back), and performs the shallow push
 // when the app asks to navigate. @civitai/blocks-react 0.85 applies each
 // `ROUTE_CHANGED` to the transport snapshot's `context.subPath` and does NOT
-// pass it to handlers registered by name (0.2.x's SDK did, which is what this
-// module listened to until 0.3.2). So the host's route is read from the
+// pass it to handlers registered by name. The interception arrived in 0.61.0
+// (with useCivitaiRoute); 0.58.1, which 0.2.x bundled, handed an unknown push
+// type to its by-name handlers, which is what this module listened to until
+// 0.3.2. So the host's route is read from the
 // snapshot, on every change the transport emits.
 //
-// The route returned here is also updated optimistically by `navigateTo`: the
-// mock host deliberately has no route control, so waiting for its echo would
-// leave the local harness (and tests) unable to move between pages. A later
-// host push always wins, because it is the history's actual position.
+// The route returned here is also updated optimistically by `navigateTo`, so the
+// view moves without waiting for the host's echo. A later host MOVE always wins,
+// because it is the history's actual position; a transport emit that leaves the
+// host's route unchanged (a token refresh, a theme change) does not.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -215,7 +217,6 @@ function subPathFromSnapshot(): string | null {
     ? normalizeRoutePath(context.subPath)
     : null;
 }
-
 
 export interface AppRouteController {
   /** Current sub-path below the app root; `''` is the app index. */
