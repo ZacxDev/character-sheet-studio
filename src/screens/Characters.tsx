@@ -557,7 +557,9 @@ export function Characters({
               </Group>
 
               {/* doDelete closes the confirm as it starts; the row stays while
-                  the delete runs so Confirm delete's spinner is seen. */}
+                  the share links are stopped so Confirm delete's spinner is
+                  seen. The library removes the character from screen as its
+                  own delete starts, so that wait is the visible one. */}
               {(confirmDeleteId === c.id || deletingId === c.id) && (
                 <div onClick={(e) => e.stopPropagation()}>
                   <p

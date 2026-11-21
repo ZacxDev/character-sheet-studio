@@ -6,8 +6,10 @@
 //      and the character editor) is handled like a run that returned nothing:
 //      the notice shows and the Enhance button is usable again, instead of
 //      staying on "Enhancing…".
-//   3. Confirm delete on a character stays on screen while the delete runs,
-//      so its busy spinner is visible.
+//   3. Confirm delete on a character stays on screen while its sheets' share
+//      links are stopped, so its busy spinner is visible. (A character with
+//      no shared sheets leaves the screen at once: the library removes it
+//      before it awaits the store.)
 // The store is the SDK fake over the committed manifest (test-setup).
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -268,20 +270,30 @@ describe('0.3.4 / 0.3.5 audit leftovers', () => {
 
   // --- 3. the character-delete spinner --------------------------------------------------
 
-  it('3: Confirm delete stays visible and busy while the character delete runs', async () => {
+  // The visible wait is the share-link stop: the real library's deleteCharacter
+  // removes the character from screen before it awaits the store, so a
+  // character with no shared sheets is gone at once. The gate is the sheet
+  // save that follows each stopped link, as in useSheetLibrary.
+  it('3: Confirm delete stays visible and busy while the share links are stopped', async () => {
     uninstall = installMockMoneyHost({ consentGranted: true });
+    const rec = await shared().create(RECORD);
     let release!: () => void;
     const gate = new Promise<void>((r) => {
       release = r;
     });
     const deletedChars: string[] = [];
+    const savedSheets: SheetJob[] = [];
     const user = userEvent.setup();
     render(
       <Characters
         library={stubLibrary({
-          sheets: [sheetWith({})],
-          deleteCharacter: async (id) => {
+          sheets: [sheetWith({ shareKey: rec.key })],
+          saveSheet: async (s) => {
             await gate;
+            savedSheets.push(s);
+            return null;
+          },
+          deleteCharacter: async (id) => {
             deletedChars.push(id);
             return null;
           },
@@ -294,7 +306,9 @@ describe('0.3.4 / 0.3.5 audit leftovers', () => {
     await user.click(screen.getByTestId('char-menu-delete'));
     await user.click(await screen.findByTestId('char-confirm-delete'));
 
-    // The delete is in flight: the button is still there, busy, with its spinner.
+    // The link is stopped and its sheet save is in flight: the button is still
+    // there, busy, with its spinner.
+    await waitFor(async () => expect(await shared().get(rec.key)).toBeNull(), { timeout: 8000 });
     const confirm = await screen.findByTestId('char-confirm-delete');
     expect(confirm).toBeVisible();
     expect(confirm).toHaveAttribute('aria-busy', 'true');
@@ -302,10 +316,12 @@ describe('0.3.4 / 0.3.5 audit leftovers', () => {
     // The Button's Loader is aria-hidden (the button's aria-busy carries the
     // state for assistive tech), so it is found with hidden: true.
     expect(within(confirm).getByRole('status', { hidden: true })).toBeVisible();
+    expect(savedSheets).toEqual([]);
     expect(deletedChars).toEqual([]);
 
     release();
     await waitFor(() => expect(deletedChars).toEqual(['char-1']), { timeout: 8000 });
+    expect(savedSheets.map((s) => s.id)).toEqual(['sheet-1']);
     await waitFor(() => expect(screen.queryByTestId('char-confirm-delete')).not.toBeInTheDocument());
   }, 20000);
 });
