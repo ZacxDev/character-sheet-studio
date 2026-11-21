@@ -2,9 +2,10 @@
 //   1. A sheet delete stops the sheet's share link first. If the delete then
 //      fails, the error says the link was already stopped (as #10 does for a
 //      character delete).
-//   2. A throw while building the panel-editor Enhance request is handled
-//      like a run that returned nothing: the notice shows and the Enhance
-//      button is usable again, instead of staying on "Enhancing…".
+//   2. A throw while building an Enhance request (the Builder's panel editor
+//      and the character editor) is handled like a run that returned nothing:
+//      the notice shows and the Enhance button is usable again, instead of
+//      staying on "Enhancing…".
 //   3. Confirm delete on a character stays on screen while the delete runs,
 //      so its busy spinner is visible.
 // The store is the SDK fake over the committed manifest (test-setup).
@@ -22,6 +23,12 @@ vi.mock('./sheet/enhance.js', async (importOriginal) => {
     buildEnhanceBody: (...args: Parameters<typeof mod.buildEnhanceBody>) => {
       if (enhance.throwOnBuild) throw new Error('body build failed');
       return mod.buildEnhanceBody(...args);
+    },
+    buildCharacterPromptEnhanceBody: (
+      ...args: Parameters<typeof mod.buildCharacterPromptEnhanceBody>
+    ) => {
+      if (enhance.throwOnBuild) throw new Error('body build failed');
+      return mod.buildCharacterPromptEnhanceBody(...args);
     },
   };
 });
@@ -233,6 +240,30 @@ describe('0.3.4 / 0.3.5 audit leftovers', () => {
     expect(button).not.toHaveAttribute('aria-busy');
     expect(button).toBeEnabled();
     expect(button).toHaveTextContent('Enhance prompt ✦');
+  }, 20000);
+
+  it('2: a throw while building the character-editor Enhance request shows the notice and frees the button', async () => {
+    uninstall = installMockMoneyHost({});
+    const user = userEvent.setup();
+    render(<Characters library={stubLibrary()} onBuildSheet={() => {}} onViewSheets={() => {}} />);
+    await user.click(screen.getByRole('button', { name: 'New character' }));
+    await user.type(screen.getByTestId('char-name'), 'Nyx');
+    await user.click(screen.getByTestId('char-step-next'));
+    await user.type(screen.getByTestId('char-positive-prompt'), 'a cyberpunk fox mercenary');
+
+    // Pricing builds the body too, so the throw is armed only for the submit.
+    await user.click(screen.getByTestId('char-enhance-positive'));
+    await screen.findByTestId('char-enhance-confirm');
+    enhance.throwOnBuild = true;
+    await user.click(screen.getByTestId('char-enhance-confirm-run'));
+
+    expect(await screen.findByTestId('char-enhance-notice', {}, { timeout: 8000 })).toHaveTextContent(
+      'The enhancement didn’t come back — your prompt is unchanged.',
+    );
+    const button = screen.getByTestId('char-enhance-positive');
+    expect(button).not.toHaveAttribute('aria-busy');
+    expect(button).toBeEnabled();
+    expect(button).toHaveTextContent('Enhance ✦');
   }, 20000);
 
   // --- 3. the character-delete spinner --------------------------------------------------
