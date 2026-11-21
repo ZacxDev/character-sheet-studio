@@ -556,7 +556,11 @@ export function Characters({
                 </Button>
               </Group>
 
-              {confirmDeleteId === c.id && (
+              {/* doDelete closes the confirm as it starts; the row stays while
+                  the share links are stopped so Confirm delete's spinner is
+                  seen. The library removes the character from screen as its
+                  own delete starts, so that wait is the visible one. */}
+              {(confirmDeleteId === c.id || deletingId === c.id) && (
                 <div onClick={(e) => e.stopPropagation()}>
                   <p
                     style={{ margin: '10px 0 0', fontSize: 13, opacity: 0.75 }}
@@ -586,6 +590,7 @@ export function Characters({
                     <Button
                       size="sm"
                       variant="subtle"
+                      disabled={deletingId === c.id}
                       onClick={() => setConfirmDeleteId(null)}
                     >
                       Keep
@@ -835,10 +840,17 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoi
     const field = fxField;
     setFxPhase('running');
     fxRunRef.current += 1;
-    const outcome = await runFxWorkflow(
-      fxBody(field),
-      idempotencyKeyFor('enhance', `character-editor:${field}`, fxRunRef.current),
-    );
+    // The body is built inside the try: a throw there is a run that returned
+    // nothing, not an escape that leaves the button on "Enhancing…".
+    let outcome: EnhanceOutcome;
+    try {
+      outcome = await runFxWorkflow(
+        fxBody(field),
+        idempotencyKeyFor('enhance', `character-editor:${field}`, fxRunRef.current),
+      );
+    } catch {
+      outcome = { type: 'none' };
+    }
     setFxQuote(null);
     setFxPhase('idle');
     if (outcome.type === 'text') {

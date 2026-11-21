@@ -921,10 +921,17 @@ export function SheetBuilder({ library, preselectedCharacterId, preselectedStack
     }
     setCpPhase('running');
     cpRunRef.current += 1;
-    const outcome = await runEnhanceWorkflowRef.current(
-      buildEnhanceBody(composed, s.checkpoint.baseModel),
-      idempotencyKeyFor('enhance', `${c.id}:panel-editor`, cpRunRef.current),
-    );
+    // The body is built inside the try: a throw there is a run that returned
+    // nothing, not an escape that leaves the button on "Enhancing…".
+    let outcome: EnhanceOutcome;
+    try {
+      outcome = await runEnhanceWorkflowRef.current(
+        buildEnhanceBody(composed, s.checkpoint.baseModel),
+        idempotencyKeyFor('enhance', `${c.id}:panel-editor`, cpRunRef.current),
+      );
+    } catch {
+      outcome = { type: 'none' };
+    }
     setCpQuote(null);
     setCpPhase('idle');
     if (outcome.type === 'text') {

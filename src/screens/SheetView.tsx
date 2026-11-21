@@ -1317,6 +1317,7 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       // A shared sheet's record goes first: deleting the sheet alone would leave
       // a live link nobody can stop any more. If that fails, keep the sheet.
       const key = sheetRef.current?.shareKey;
+      const name = sheetRef.current?.name ?? 'This sheet';
       if (key) {
         try {
           if (!docs) throw new Error('no storage client');
@@ -1329,7 +1330,15 @@ export function SheetView({ library, sheetId, onBack, onNewSheet, onRegenerateSh
       }
       const err = await library.deleteSheet(sheetId);
       if (err) {
-        setError(storeErrorMessage(err));
+        // The record is already gone, so the link no longer works. The key is
+        // left on the sheet: saving the sheet here could bring back a sheet
+        // the store did delete. Update shared sheet mints a new link for a
+        // key whose record is gone (saveSharedSheet).
+        setError(
+          key
+            ? `“${name}” wasn’t deleted. ${storeErrorMessage(err)} Its share link was already stopped; press Update shared sheet to share it again if you want it public.`
+            : storeErrorMessage(err),
+        );
         setConfirmDelete(false);
         return;
       }
