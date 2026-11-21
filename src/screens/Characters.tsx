@@ -838,10 +838,17 @@ function CharacterEditor({ initial, onClose, onSaved, saveCharacter, profileChoi
     const field = fxField;
     setFxPhase('running');
     fxRunRef.current += 1;
-    const outcome = await runFxWorkflow(
-      fxBody(field),
-      idempotencyKeyFor('enhance', `character-editor:${field}`, fxRunRef.current),
-    );
+    // The body is built inside the try: a throw there is a run that returned
+    // nothing, not an escape that leaves the button on "Enhancing…".
+    let outcome: EnhanceOutcome;
+    try {
+      outcome = await runFxWorkflow(
+        fxBody(field),
+        idempotencyKeyFor('enhance', `character-editor:${field}`, fxRunRef.current),
+      );
+    } catch {
+      outcome = { type: 'none' };
+    }
     setFxQuote(null);
     setFxPhase('idle');
     if (outcome.type === 'text') {
