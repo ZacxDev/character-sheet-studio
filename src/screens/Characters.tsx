@@ -556,7 +556,9 @@ export function Characters({
                 </Button>
               </Group>
 
-              {confirmDeleteId === c.id && (
+              {/* doDelete closes the confirm as it starts; the row stays while
+                  the delete runs so Confirm delete's spinner is seen. */}
+              {(confirmDeleteId === c.id || deletingId === c.id) && (
                 <div onClick={(e) => e.stopPropagation()}>
                   <p
                     style={{ margin: '10px 0 0', fontSize: 13, opacity: 0.75 }}
@@ -586,6 +588,7 @@ export function Characters({
                     <Button
                       size="sm"
                       variant="subtle"
+                      disabled={deletingId === c.id}
                       onClick={() => setConfirmDeleteId(null)}
                     >
                       Keep
